@@ -1,0 +1,159 @@
+# scanner.py
+
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass
+class MarketMetrics:
+    symbol: str
+    mark_price: float
+    day_change_pct: float
+    change_15m_pct: float
+    change_1h_pct: float
+    daily_rvol: float
+    intraday_rvol: float
+    open_interest_usd: float
+    funding_rate: float
+    spread_bps: float
+    depth_1pct_usd: float
+    liquidation_usd_1h: float
+    has_news: bool = False
+
+
+def clamp(value: float, low: float = 0, high: float = 100) -> float:
+    return max(low, min(value, high))
+
+
+def score_day_change(day_change_pct: float) -> float:
+    if day_change_pct < 2:
+        return 0
+    if day_change_pct >= 10:
+        return 20
+    return clamp((day_change_pct / 10) * 20)
+
+
+def score_rvol(daily_rvol: float, intraday_rvol: float) -> float:
+    daily_score = min(daily_rvol / 5, 1) * 12.5
+    intraday_score = min(intraday_rvol / 5, 1) * 12.5
+    return daily_score + intraday_score
+
+
+def score_acceleration(change_15m_pct: float, change_1h_pct: float) -> float:
+    if change_15m_pct <= 0:
+        return 0
+
+    score = 0
+    if change_15m_pct >= 1:
+        score += 5
+    if change_15m_pct >= 2:
+        score += 5
+    if change_1h_pct >= 4:
+        score += 5
+    if change_15m_pct > (change_1h_pct / 2):
+        score += 5
+
+    return clamp(score, 0, 20)
+
+
+def score_squeeze_structure(
+    open_interest_usd: float,
+    spread_bps: float,
+    depth_1pct_usd: float,
+) -> float:
+    score = 20
+
+    # Too much OI may mean the move is already crowded.
+    if open_interest_usd > 500_000_000:
+        score -= 8
+    elif open_interest_usd > 200_000_000:
+        score -= 4
+
+    # Wide spread is dangerous.
+    if spread_bps > 20:
+        score -= 8
+    elif spread_bps > 10:
+        score -= 4
+
+    # Thin book can squeeze, but too thin is dangerous.
+    if depth_1pct_usd < 100_000:
+        score -= 8
+    elif depth_1pct_usd < 500_000:
+        score += 3
+
+    return clamp(score, 0, 20)
+
+
+def score_catalyst(has_news: bool, liquidation_usd_1h: float, funding_rate: float) -> float:
+    score = 0
+
+    if has_news:
+        score += 8
+
+    if liquidation_usd_1h > 1_000_000:
+        score += 4
+
+    if abs(funding_rate) > 0.0005:
+        score += 3
+
+    return clamp(score, 0, 15)
+
+
+def total_setup_score(m: MarketMetrics) -> dict:
+    day = score_day_change(m.day_change_pct)
+    rvol = score_rvol(m.daily_rvol, m.intraday_rvol)
+    accel = score_acceleration(m.change_15m_pct, m.change_1h_pct)
+    squeeze = score_squeeze_structure(
+        m.open_interest_usd,
+        m.spread_bps,
+        m.depth_1pct_usd,
+    )
+    catalyst = score_catalyst(
+        m.has_news,
+        m.liquidation_usd_1h,
+        m.funding_rate,
+    )
+
+    total = day + rvol + accel + squeeze + catalyst
+
+    if total >= 85:
+        alert = "A+ SETUP"
+    elif total >= 75:
+        alert = "ACTIVE SETUP"
+    elif total >= 60:
+        alert = "WATCH"
+    else:
+        alert = "IGNORE"
+
+    return {
+        "symbol": m.symbol,
+        "score": round(total, 2),
+        "alert": alert,
+        "components": {
+            "day_change": round(day, 2),
+            "rvol": round(rvol, 2),
+            "acceleration": round(accel, 2),
+            "squeeze_structure": round(squeeze, 2),
+            "catalyst": round(catalyst, 2),
+        },
+    }
+
+
+if __name__ == "__main__":
+    sample = MarketMetrics(
+        symbol="HYPE",
+        mark_price=28.5,
+        day_change_pct=7.2,
+        change_15m_pct=2.1,
+        change_1h_pct=5.4,
+        daily_rvol=3.8,
+        intraday_rvol=6.2,
+        open_interest_usd=120_000_000,
+        funding_rate=0.0007,
+        spread_bps=4.5,
+        depth_1pct_usd=450_000,
+        liquidation_usd_1h=1_500_000,
+        has_news=False,
+    )
+
+    print(total_setup_score(sample))

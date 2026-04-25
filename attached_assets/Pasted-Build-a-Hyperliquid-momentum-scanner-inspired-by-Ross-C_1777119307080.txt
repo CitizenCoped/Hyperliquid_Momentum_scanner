@@ -1,0 +1,98 @@
+Build a Hyperliquid momentum scanner inspired by Ross Cameron’s NASDAQ small-cap strategy.
+
+Goal:
+Create a mobile and desktop web app that detects early-stage high-momentum Hyperliquid perp moves and sends alerts before the move becomes obvious.
+
+Use QuickNode as the market data provider.
+
+Core concept:
+Translate these NASDAQ scanner criteria into Hyperliquid-native equivalents:
+
+1. Stock up 10% on day
+   -> Hyperliquid equivalent:
+   - Perp up 3%, 5%, 8%, or 10% on day
+   - Also track 15m, 30m, 1h, 4h percentage change
+   - Alert earlier on acceleration, not just daily move
+
+2. 5x relative volume
+   -> Hyperliquid equivalent:
+   - Daily RVOL = today volume / 20-day average daily volume
+   - Intraday RVOL = current hour volume / average same-hour volume over prior 20 days
+   - Acceleration RVOL = last 5m volume / average 5m volume
+
+3. Stock price between $2-$20
+   -> Hyperliquid equivalent:
+   - Keep price filter optional
+   - More important: liquidity, spread, volatility, and leverage suitability
+   - Track assets with enough liquidity but not already too crowded
+
+4. Low float
+   -> Hyperliquid equivalent:
+   - Low-to-moderate open interest
+   - Thin order book
+   - Low depth within 0.5% or 1% of mid price
+   - High price impact from moderate trade size
+   - Rising volume before open interest becomes crowded
+
+5. Breaking news
+   -> Hyperliquid equivalent:
+   - Official Hyperliquid announcements
+   - New listings
+   - Protocol/news headlines
+   - Market-data proxy when no headline exists:
+     sudden funding shift, liquidation cluster, volume spike, order-book thinning, aggressive buy flow
+
+Build two main screens:
+
+1. Setup Board
+   Ranked list of all Hyperliquid assets by opportunity score:
+   - Symbol
+   - Mark price
+   - Day change %
+   - 15m change %
+   - 1h change %
+   - Daily RVOL
+   - Intraday RVOL
+   - Open interest
+   - Funding rate
+   - Spread
+   - Depth score
+   - Liquidation pressure
+   - Catalyst flag
+   - Overall setup score
+
+2. Live Trigger Feed
+   Real-time alerts when a setup activates:
+   - RVOL spike
+   - Price breakout
+   - Aggressive trade burst
+   - Order book thinning
+   - Funding/OI/liquidation confirmation
+
+Data architecture:
+- Use QuickNode SQL Explorer for historical analytics, baselines, RVOL, rankings, and backtesting.
+- Use QuickNode HyperCore WebSocket or gRPC streams for live trade/order-book triggers.
+- Store calculated metrics in Postgres/TimescaleDB.
+- Use Redis for real-time state and alert deduplication.
+
+Alert logic:
+Create a score from 0-100.
+
+Example:
+- Day change score: 0-20
+- RVOL score: 0-25
+- Intraday acceleration score: 0-20
+- Low-float-equivalent/liquidity squeeze score: 0-20
+- Catalyst/news/proxy score: 0-15
+
+Alert levels:
+- Watch: score >= 60
+- Active setup: score >= 75
+- A+ setup: score >= 85
+
+Do not execute trades in version 1.
+This is scanner and alerting only.
+
+Use TypeScript where possible.
+Prioritize clean, readable code.
+Use environment variables for QuickNode API keys.
