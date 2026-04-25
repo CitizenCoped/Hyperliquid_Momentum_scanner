@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { scanner } from "./lib/scanner-engine";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +23,7 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+  void scanner.start().catch((startErr) => {
+    logger.error({ err: startErr }, "Scanner failed to start");
+  });
 });
