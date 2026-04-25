@@ -3,13 +3,19 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Hyperliquid Momentum Scanner API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: scanner
+    description: Scanner setup board - ranked asset metrics
+  - name: alerts
+    description: Live trigger feed and alert history
+  - name: settings
+    description: Alert settings and thresholds
 paths:
   /healthz:
     get:
@@ -24,6 +30,192 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /scanner/assets:
+    get:
+      operationId: listAssets
+      tags: [scanner]
+      summary: List all assets with momentum scores
+      description: Returns all Hyperliquid perp assets ranked by setup score
+      parameters:
+        - name: minScore
+          in: query
+          schema:
+            type: ["number", "null"]
+          description: Filter by minimum setup score
+        - name: alertLevel
+          in: query
+          schema:
+            type: ["string", "null"]
+            enum: [WATCH, ACTIVE_SETUP, A_PLUS_SETUP, IGNORE, null]
+          description: Filter by alert level
+        - name: sortBy
+          in: query
+          schema:
+            type: ["string", "null"]
+          description: Field to sort by (default setupScore)
+        - name: sortDir
+          in: query
+          schema:
+            type: ["string", "null"]
+            enum: [asc, desc, null]
+      responses:
+        "200":
+          description: List of assets with scores
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssetMetrics"
+
+  /scanner/assets/{symbol}:
+    get:
+      operationId: getAsset
+      tags: [scanner]
+      summary: Get single asset metrics
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Asset metrics and score breakdown
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetMetrics"
+        "404":
+          description: Asset not found
+
+  /scanner/summary:
+    get:
+      operationId: getScannerSummary
+      tags: [scanner]
+      summary: Summary stats for the setup board
+      description: Counts by alert level, top movers, average RVOL
+      responses:
+        "200":
+          description: Summary statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScannerSummary"
+
+  /alerts:
+    get:
+      operationId: listAlerts
+      tags: [alerts]
+      summary: List recent trigger alerts
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: ["integer", "null"]
+        - name: symbol
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: alertLevel
+          in: query
+          schema:
+            type: ["string", "null"]
+            enum: [WATCH, ACTIVE_SETUP, A_PLUS_SETUP, null]
+      responses:
+        "200":
+          description: Recent alerts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Alert"
+
+  /alerts/{id}:
+    get:
+      operationId: getAlert
+      tags: [alerts]
+      summary: Get alert details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Alert details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Alert"
+        "404":
+          description: Alert not found
+
+  /alerts/{id}/dismiss:
+    post:
+      operationId: dismissAlert
+      tags: [alerts]
+      summary: Dismiss an alert
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Alert dismissed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Alert"
+
+  /alerts/test-pushover:
+    post:
+      operationId: testPushover
+      tags: [alerts]
+      summary: Send a test Pushover notification
+      responses:
+        "200":
+          description: Test notification sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestPushoverResponse"
+
+  /settings:
+    get:
+      operationId: getSettings
+      tags: [settings]
+      summary: Get alert settings
+      responses:
+        "200":
+          description: Current settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+    put:
+      operationId: updateSettings
+      tags: [settings]
+      summary: Update alert settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSettingsBody"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +226,211 @@ components:
       required:
         - status
 
+    AssetMetrics:
+      type: object
+      properties:
+        symbol:
+          type: string
+        markPrice:
+          type: number
+        dayChangePct:
+          type: number
+        change15mPct:
+          type: number
+        change1hPct:
+          type: number
+        change4hPct:
+          type: number
+        dailyRvol:
+          type: number
+        intradayRvol:
+          type: number
+        openInterestUsd:
+          type: number
+        fundingRate:
+          type: number
+        spreadBps:
+          type: number
+        depth1pctUsd:
+          type: number
+        liquidationUsd1h:
+          type: number
+        hasNews:
+          type: boolean
+        setupScore:
+          type: number
+        alertLevel:
+          type: string
+          enum: [WATCH, ACTIVE_SETUP, A_PLUS_SETUP, IGNORE]
+        scoreBreakdown:
+          $ref: "#/components/schemas/ScoreBreakdown"
+        updatedAt:
+          type: string
+      required:
+        - symbol
+        - markPrice
+        - dayChangePct
+        - change15mPct
+        - change1hPct
+        - change4hPct
+        - dailyRvol
+        - intradayRvol
+        - openInterestUsd
+        - fundingRate
+        - spreadBps
+        - depth1pctUsd
+        - liquidationUsd1h
+        - hasNews
+        - setupScore
+        - alertLevel
+        - scoreBreakdown
+        - updatedAt
+
+    ScoreBreakdown:
+      type: object
+      properties:
+        dayChange:
+          type: number
+        rvol:
+          type: number
+        acceleration:
+          type: number
+        squeezeStructure:
+          type: number
+        catalyst:
+          type: number
+      required:
+        - dayChange
+        - rvol
+        - acceleration
+        - squeezeStructure
+        - catalyst
+
+    ScannerSummary:
+      type: object
+      properties:
+        totalAssets:
+          type: integer
+        aPlusCount:
+          type: integer
+        activeSetupCount:
+          type: integer
+        watchCount:
+          type: integer
+        avgRvol:
+          type: number
+        topMoverSymbol:
+          type: ["string", "null"]
+        topMoverChangePct:
+          type: ["number", "null"]
+        lastUpdated:
+          type: string
+      required:
+        - totalAssets
+        - aPlusCount
+        - activeSetupCount
+        - watchCount
+        - avgRvol
+        - topMoverSymbol
+        - topMoverChangePct
+        - lastUpdated
+
+    Alert:
+      type: object
+      properties:
+        id:
+          type: integer
+        symbol:
+          type: string
+        alertLevel:
+          type: string
+          enum: [WATCH, ACTIVE_SETUP, A_PLUS_SETUP]
+        setupScore:
+          type: number
+        triggerReason:
+          type: string
+        markPrice:
+          type: number
+        dayChangePct:
+          type: number
+        rvol:
+          type: number
+        dismissed:
+          type: boolean
+        pushoverSent:
+          type: boolean
+        scoreBreakdown:
+          $ref: "#/components/schemas/ScoreBreakdown"
+        createdAt:
+          type: string
+      required:
+        - id
+        - symbol
+        - alertLevel
+        - setupScore
+        - triggerReason
+        - markPrice
+        - dayChangePct
+        - rvol
+        - dismissed
+        - pushoverSent
+        - scoreBreakdown
+        - createdAt
+
+    TestPushoverResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+        - success
+        - message
+
+    Settings:
+      type: object
+      properties:
+        id:
+          type: integer
+        watchThreshold:
+          type: number
+        activeSetupThreshold:
+          type: number
+        aPlusThreshold:
+          type: number
+        pushoverEnabled:
+          type: boolean
+        minAlertLevel:
+          type: string
+          enum: [WATCH, ACTIVE_SETUP, A_PLUS_SETUP]
+        scanIntervalSeconds:
+          type: integer
+        updatedAt:
+          type: string
+      required:
+        - id
+        - watchThreshold
+        - activeSetupThreshold
+        - aPlusThreshold
+        - pushoverEnabled
+        - minAlertLevel
+        - scanIntervalSeconds
+        - updatedAt
+
+    UpdateSettingsBody:
+      type: object
+      properties:
+        watchThreshold:
+          type: ["number", "null"]
+        activeSetupThreshold:
+          type: ["number", "null"]
+        aPlusThreshold:
+          type: ["number", "null"]
+        pushoverEnabled:
+          type: ["boolean", "null"]
+        minAlertLevel:
+          type: ["string", "null"]
+          enum: [WATCH, ACTIVE_SETUP, A_PLUS_SETUP, null]
+        scanIntervalSeconds:
+          type: ["integer", "null"]
