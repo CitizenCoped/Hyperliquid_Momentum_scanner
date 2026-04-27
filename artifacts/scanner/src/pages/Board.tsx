@@ -1,4 +1,7 @@
-import { useListAssets } from "@workspace/api-client-react";
+import {
+  getListAssetsQueryKey,
+  useListAssets,
+} from "@workspace/api-client-react";
 import { useLocation } from "wouter";
 import { useState } from "react";
 import { PulseNumber } from "@/components/ui/pulse-number";
@@ -11,10 +14,13 @@ export default function Board() {
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
   
-  const { data: assets = [], isLoading } = useListAssets(
-    { sortBy: "setupScore", sortDir: "desc" },
-    { query: { refetchInterval: 10000 } }
-  );
+  const assetParams = { sortBy: "setupScore", sortDir: "desc" } as const;
+  const { data: assets = [], isLoading } = useListAssets(assetParams, {
+    query: {
+      queryKey: getListAssetsQueryKey(assetParams),
+      refetchInterval: 10000,
+    },
+  });
 
   const filteredAssets = assets.filter(a => 
     a.symbol.toLowerCase().includes(search.toLowerCase())
