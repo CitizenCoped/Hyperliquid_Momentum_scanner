@@ -65,6 +65,7 @@ class ScannerEngine {
   private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private pollInFlight = false;
   private currentIntervalSec = 15;
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
@@ -80,7 +81,7 @@ class ScannerEngine {
       { intervalSec: this.currentIntervalSec },
       "Scanner engine starting",
     );
-    void this.runOnce();
+    void this.runOnceExclusive();
     this.scheduleNext();
   }
 
@@ -94,8 +95,24 @@ class ScannerEngine {
     if (!this.running) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
-      void this.runOnce().finally(() => this.scheduleNext());
+      void this.runOnceExclusive().finally(() => this.scheduleNext());
     }, this.currentIntervalSec * 1000);
+  }
+
+  private async runOnceExclusive(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn(
+        "Skipping scanner poll because the previous poll is still running",
+      );
+      return;
+    }
+
+    this.pollInFlight = true;
+    try {
+      await this.runOnce();
+    } finally {
+      this.pollInFlight = false;
+    }
   }
 
   private async ensureDefaultSettings(): Promise<void> {
