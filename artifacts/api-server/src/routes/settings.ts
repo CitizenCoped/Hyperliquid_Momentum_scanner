@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { z } from "zod";
 import { scanner } from "../lib/scanner-engine";
 import type { Settings } from "@workspace/db/schema";
+import { requireAdminToken } from "../lib/admin-auth";
 
 const router: IRouter = Router();
 
@@ -36,7 +37,7 @@ router.get("/settings", async (_req, res) => {
   res.json(serialize(s));
 });
 
-router.put("/settings", async (req, res) => {
+router.put("/settings", requireAdminToken, async (req, res) => {
   const parsed = settingsPatchSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({
