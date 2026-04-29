@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { Save, Bell, Loader2 } from "lucide-react";
+import { getAdminToken, setAdminToken } from "@/lib/admin-token";
 
 const settingsSchema = z.object({
   watchThreshold: z.coerce.number().min(0).max(100),
@@ -28,6 +29,7 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const adminTokenRef = useRef<HTMLInputElement>(null);
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -54,7 +56,29 @@ export default function Settings() {
     }
   }, [settings, form]);
 
+  const configureAdminToken = () => {
+    const token = adminTokenRef.current?.value.trim() ?? "";
+    if (!token) {
+      toast({
+        title: "Admin token required",
+        description: "Enter the scanner admin token before changing settings.",
+        variant: "destructive",
+      });
+      return false;
+    }
+    setAdminToken(token);
+    return true;
+  };
+
+  useEffect(() => {
+    if (adminTokenRef.current) {
+      adminTokenRef.current.value = getAdminToken();
+    }
+  }, []);
+
   const onSubmit = (data: SettingsFormValues) => {
+    if (!configureAdminToken()) return;
+
     updateSettings.mutate({ data }, {
       onSuccess: () => {
         toast({
@@ -73,6 +97,8 @@ export default function Settings() {
   };
 
   const handleTestNotification = () => {
+    if (!configureAdminToken()) return;
+
     testPushover.mutate(undefined, {
       onSuccess: (res) => {
         if (res.success) {
@@ -109,6 +135,26 @@ export default function Settings() {
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+            <div className="bg-card border border-border rounded-lg p-6 space-y-4">
+              <h2 className="text-sm font-bold text-primary uppercase tracking-widest">
+                Admin Access
+              </h2>
+              <div className="space-y-2">
+                <Label htmlFor="adminToken">Scanner Admin Token</Label>
+                <Input
+                  id="adminToken"
+                  ref={adminTokenRef}
+                  type="password"
+                  autoComplete="off"
+                  className="font-mono bg-background"
+                  placeholder="Required to save settings or send test alerts"
+                />
+                <p className="text-xs text-muted-foreground">
+                  This token is stored in this browser and sent only with admin
+                  actions.
+                </p>
+              </div>
+            </div>
             
             <div className="bg-card border border-border rounded-lg p-6 space-y-6">
               <h2 className="text-sm font-bold text-primary uppercase tracking-widest flex items-center gap-2">

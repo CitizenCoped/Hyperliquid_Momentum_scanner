@@ -5,6 +5,7 @@ import { PulseNumber } from "@/components/ui/pulse-number";
 import { formatPercent, formatNumber } from "@/lib/format";
 import { BellRing, Check, BellOff } from "lucide-react";
 import { useLocation } from "wouter";
+import { getAdminToken } from "@/lib/admin-token";
 
 export default function Feed() {
   const [, setLocation] = useLocation();
@@ -17,6 +18,7 @@ export default function Feed() {
 
   const handleDismiss = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
+    if (!getAdminToken()) return;
     dismissAlert.mutate({ id }, {
       onSuccess: () => refetch()
     });
@@ -76,7 +78,7 @@ export default function Feed() {
                   <button 
                     onClick={(e) => handleDismiss(e, alert.id)}
                     className="p-1.5 bg-muted hover:bg-secondary text-foreground rounded border border-border hover:border-primary transition-colors"
-                    title="Dismiss Alert"
+                    title={getAdminToken() ? "Dismiss Alert" : "Admin token required in Settings"}
                   >
                     <Check className="h-4 w-4" />
                   </button>
