@@ -4,6 +4,7 @@ info:
   title: Api
   version: 0.1.0
   description: Hyperliquid Momentum Scanner API
+security: []
 servers:
   - url: /api
     description: Base API path
@@ -159,6 +160,8 @@ paths:
       operationId: dismissAlert
       tags: [alerts]
       summary: Dismiss an alert
+      security:
+        - AdminBearer: []
       parameters:
         - name: id
           in: path
@@ -178,6 +181,8 @@ paths:
       operationId: testPushover
       tags: [alerts]
       summary: Send a test Pushover notification
+      security:
+        - AdminBearer: []
       responses:
         "200":
           description: Test notification sent
@@ -202,6 +207,8 @@ paths:
       operationId: updateSettings
       tags: [settings]
       summary: Update alert settings
+      security:
+        - AdminBearer: []
       requestBody:
         required: true
         content:
@@ -217,6 +224,12 @@ paths:
                 $ref: "#/components/schemas/Settings"
 
 components:
+  securitySchemes:
+    AdminBearer:
+      type: http
+      scheme: bearer
+      description: Admin token configured with SCANNER_ADMIN_TOKEN.
+
   schemas:
     HealthStatus:
       type: object

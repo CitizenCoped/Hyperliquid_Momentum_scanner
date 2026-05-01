@@ -1,10 +1,12 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { Activity, LayoutDashboard, Settings as SettingsIcon, TerminalSquare } from "lucide-react";
+import { Activity, KeyRound, LayoutDashboard, Settings as SettingsIcon, TerminalSquare } from "lucide-react";
 import { useHealthCheck, useGetScannerSummary } from "@workspace/api-client-react";
 import { PulseNumber } from "../ui/pulse-number";
 import { formatNumber } from "@/lib/format";
+import { clearStoredAdminToken, getStoredAdminToken, setStoredAdminToken } from "@/lib/admin-token";
+import { useState } from "react";
 
 interface ShellProps {
   children: ReactNode;
@@ -12,6 +14,7 @@ interface ShellProps {
 
 export function Shell({ children }: ShellProps) {
   const [location] = useLocation();
+  const [adminToken, setAdminToken] = useState(() => getStoredAdminToken() ?? "");
   const { data: health } = useHealthCheck({ query: { refetchInterval: 30000 } });
   const { data: summary } = useGetScannerSummary({ query: { refetchInterval: 10000 } });
 
@@ -22,6 +25,16 @@ export function Shell({ children }: ShellProps) {
   ];
 
   const isHealthy = health?.status === "ok";
+  const hasAdminToken = adminToken.trim().length > 0;
+
+  const handleAdminTokenChange = (value: string) => {
+    setAdminToken(value);
+    if (value.trim()) {
+      setStoredAdminToken(value);
+    } else {
+      clearStoredAdminToken();
+    }
+  };
 
   return (
     <div className="flex flex-col min-h-screen bg-background text-foreground dark">
@@ -72,6 +85,18 @@ export function Shell({ children }: ShellProps) {
             </div>
           </div>
         )}
+
+        <div className="hidden md:flex items-center gap-1.5 ml-4 normal-case tracking-normal">
+          <KeyRound className={cn("h-3.5 w-3.5", hasAdminToken ? "text-primary" : "text-muted-foreground")} />
+          <input
+            type="password"
+            value={adminToken}
+            onChange={(event) => handleAdminTokenChange(event.target.value)}
+            placeholder="Admin token"
+            aria-label="Admin token for protected actions"
+            className="h-7 w-32 rounded-sm border border-border bg-background px-2 font-mono text-[10px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary"
+          />
+        </div>
 
         <div className="flex items-center gap-2 ml-4">
           <div className="flex items-center gap-1.5">
