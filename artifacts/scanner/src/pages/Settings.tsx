@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { Save, Bell, Loader2 } from "lucide-react";
+import { getAdminToken, isUnauthorizedError, setAdminToken } from "@/lib/admin-token";
 
 const settingsSchema = z.object({
   watchThreshold: z.coerce.number().min(0).max(100),
@@ -28,6 +29,7 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [adminTokenInput, setAdminTokenInput] = useState(() => getAdminToken());
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -54,7 +56,14 @@ export default function Settings() {
     }
   }, [settings, form]);
 
+  const persistAdminToken = () => {
+    const token = adminTokenInput.trim();
+    setAdminToken(token);
+    return token;
+  };
+
   const onSubmit = (data: SettingsFormValues) => {
+    persistAdminToken();
     updateSettings.mutate({ data }, {
       onSuccess: () => {
         toast({
@@ -65,7 +74,9 @@ export default function Settings() {
       onError: (err) => {
         toast({
           title: "Error",
-          description: "Failed to save settings.",
+          description: isUnauthorizedError(err)
+            ? "Admin API token is missing or invalid."
+            : "Failed to save settings.",
           variant: "destructive",
         });
       }
@@ -73,6 +84,7 @@ export default function Settings() {
   };
 
   const handleTestNotification = () => {
+    persistAdminToken();
     testPushover.mutate(undefined, {
       onSuccess: (res) => {
         if (res.success) {
@@ -88,10 +100,12 @@ export default function Settings() {
           });
         }
       },
-      onError: () => {
+      onError: (err) => {
         toast({
           title: "Error",
-          description: "Failed to connect to Pushover API.",
+          description: isUnauthorizedError(err)
+            ? "Admin API token is missing or invalid."
+            : "Failed to connect to Pushover API.",
           variant: "destructive",
         });
       }
@@ -109,6 +123,26 @@ export default function Settings() {
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+            <div className="bg-card border border-border rounded-lg p-6 space-y-4">
+              <h2 className="text-sm font-bold text-primary uppercase tracking-widest">
+                Admin Access
+              </h2>
+              <div className="space-y-2">
+                <Label htmlFor="admin-token">Admin API Token</Label>
+                <Input
+                  id="admin-token"
+                  type="password"
+                  value={adminTokenInput}
+                  onChange={(event) => setAdminTokenInput(event.target.value)}
+                  placeholder="Required for saving settings and test notifications"
+                  className="font-mono bg-background"
+                  autoComplete="off"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Stored only in this browser session and sent as a bearer token for admin actions.
+                </p>
+              </div>
+            </div>
             
             <div className="bg-card border border-border rounded-lg p-6 space-y-6">
               <h2 className="text-sm font-bold text-primary uppercase tracking-widest flex items-center gap-2">

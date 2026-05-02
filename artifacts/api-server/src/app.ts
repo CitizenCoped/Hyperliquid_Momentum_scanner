@@ -3,6 +3,7 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { requireAdminAuth } from "./lib/admin-auth";
 
 const app: Express = express();
 
@@ -29,6 +30,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+app.use("/api", requireAdminAuth);
 app.use("/api", router);
 
 export default app;
