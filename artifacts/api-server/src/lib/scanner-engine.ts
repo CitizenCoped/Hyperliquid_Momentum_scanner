@@ -5,7 +5,7 @@ import {
   settings as settingsTable,
   type Settings,
 } from "@workspace/db/schema";
-import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import {
   fetchL2Book,
@@ -101,20 +101,31 @@ class ScannerEngine {
   private async ensureDefaultSettings(): Promise<void> {
     const existing = await db.select().from(settingsTable).limit(1);
     if (existing.length === 0) {
-      await db.insert(settingsTable).values({});
+      await db
+        .insert(settingsTable)
+        .values({ id: 1 })
+        .onConflictDoNothing();
     }
   }
 
   async getSettings(): Promise<Settings> {
     await this.ensureDefaultSettings();
-    const [row] = await db.select().from(settingsTable).limit(1);
+    const [row] = await db
+      .select()
+      .from(settingsTable)
+      .orderBy(asc(settingsTable.id))
+      .limit(1);
     if (!row) throw new Error("Settings row missing after ensure");
     return row;
   }
 
   async updateSettings(patch: Partial<Settings>): Promise<Settings> {
     await this.ensureDefaultSettings();
-    const [existing] = await db.select().from(settingsTable).limit(1);
+    const [existing] = await db
+      .select()
+      .from(settingsTable)
+      .orderBy(asc(settingsTable.id))
+      .limit(1);
     if (!existing) throw new Error("Settings row missing");
     const updates: Partial<Settings> = { ...patch };
     delete updates.id;
