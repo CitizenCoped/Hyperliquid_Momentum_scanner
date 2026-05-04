@@ -52,6 +52,7 @@ const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const BOOK_REFRESH_INTERVAL_MS = 60 * 1000;
 const SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const TOP_N_FOR_BOOK_DETAILS = 25;
+const SETTINGS_SINGLETON_ID = 1;
 
 interface BookCacheEntry {
   spreadBps: number;
@@ -99,29 +100,31 @@ class ScannerEngine {
   }
 
   private async ensureDefaultSettings(): Promise<void> {
-    const existing = await db.select().from(settingsTable).limit(1);
-    if (existing.length === 0) {
-      await db.insert(settingsTable).values({});
-    }
+    await db
+      .insert(settingsTable)
+      .values({ id: SETTINGS_SINGLETON_ID })
+      .onConflictDoNothing();
   }
 
   async getSettings(): Promise<Settings> {
     await this.ensureDefaultSettings();
-    const [row] = await db.select().from(settingsTable).limit(1);
+    const [row] = await db
+      .select()
+      .from(settingsTable)
+      .where(eq(settingsTable.id, SETTINGS_SINGLETON_ID))
+      .limit(1);
     if (!row) throw new Error("Settings row missing after ensure");
     return row;
   }
 
   async updateSettings(patch: Partial<Settings>): Promise<Settings> {
     await this.ensureDefaultSettings();
-    const [existing] = await db.select().from(settingsTable).limit(1);
-    if (!existing) throw new Error("Settings row missing");
     const updates: Partial<Settings> = { ...patch };
     delete updates.id;
     const [updated] = await db
       .update(settingsTable)
       .set({ ...updates, updatedAt: new Date() })
-      .where(eq(settingsTable.id, existing.id))
+      .where(eq(settingsTable.id, SETTINGS_SINGLETON_ID))
       .returning();
     if (!updated) throw new Error("Failed to update settings");
     if (updated.scanIntervalSeconds !== this.currentIntervalSec) {
