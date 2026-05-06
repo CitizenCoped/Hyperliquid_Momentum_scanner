@@ -59,10 +59,15 @@ interface BookCacheEntry {
   fetchedAt: number;
 }
 
+interface AlertCooldownEntry {
+  at: number;
+  alertLevel: string;
+}
+
 class ScannerEngine {
   private state = new Map<string, AssetState>();
   private bookCache = new Map<string, BookCacheEntry>();
-  private lastAlertAt = new Map<string, number>();
+  private lastAlertAt = new Map<string, AlertCooldownEntry>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private currentIntervalSec = 15;
@@ -456,43 +461,58 @@ class ScannerEngine {
       const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       if (rank < ALERT_LEVEL_RANK.WATCH) continue;
       // Fast in-memory short-circuit; durable DB check happens below.
-      const lastInMem = this.lastAlertAt.get(asset.symbol) ?? 0;
-      if (now - lastInMem < ALERT_COOLDOWN_MS) continue;
+      const shouldPush = settings.pushoverEnabled && rank >= minRank;
+      const lastInMem = this.lastAlertAt.get(asset.symbol);
+      if (this.isCooldownBlocked(lastInMem, now, minRank, shouldPush)) {
+        continue;
+      }
       candidates.push(asset);
     }
     if (candidates.length === 0) return;
 
     // DB-backed cooldown: pull most recent alert per symbol within the window.
     // Survives restarts, scales to multiple workers (one row per fire).
-    const recent = await db.execute<{ symbol: string; created_at: Date }>(sql`
-      SELECT DISTINCT ON (symbol) symbol, created_at
+    const recent = await db.execute<{
+      symbol: string;
+      alert_level: string;
+      created_at: Date;
+    }>(sql`
+      SELECT DISTINCT ON (symbol) symbol, alert_level, created_at
       FROM alerts
       WHERE created_at >= ${cutoff}
       ORDER BY symbol, created_at DESC
     `);
-    const recentBySymbol = new Map<string, Date>();
+    const recentBySymbol = new Map<string, AlertCooldownEntry>();
     for (const r of recent.rows as unknown as Array<{
       symbol: string;
+      alert_level: string;
       created_at: Date | string;
     }>) {
       recentBySymbol.set(
         r.symbol,
-        r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
+        {
+          at:
+            r.created_at instanceof Date
+              ? r.created_at.getTime()
+              : new Date(r.created_at).getTime(),
+          alertLevel: r.alert_level,
+        },
       );
     }
 
     for (const asset of candidates) {
       const lastDb = recentBySymbol.get(asset.symbol);
-      if (lastDb && now - lastDb.getTime() < ALERT_COOLDOWN_MS) {
+      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
+      const shouldPush = settings.pushoverEnabled && rank >= minRank;
+      if (this.isCooldownBlocked(lastDb, now, minRank, shouldPush)) {
         // Backfill in-memory cache so future cycles short-circuit.
-        this.lastAlertAt.set(asset.symbol, lastDb.getTime());
+        if (lastDb) this.lastAlertAt.set(asset.symbol, lastDb);
         continue;
       }
 
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       const triggerReason = this.buildTriggerReason(asset);
       let pushoverSent = false;
-      if (settings.pushoverEnabled && rank >= minRank) {
+      if (shouldPush) {
         const result = await sendPushover({
           title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
           message: triggerReason,
@@ -512,8 +532,25 @@ class ScannerEngine {
         pushoverSent,
         scoreBreakdown: asset.scoreBreakdown,
       });
-      this.lastAlertAt.set(asset.symbol, now);
+      this.lastAlertAt.set(asset.symbol, {
+        at: now,
+        alertLevel: asset.alertLevel,
+      });
     }
+  }
+
+  private isCooldownBlocked(
+    last: AlertCooldownEntry | undefined,
+    now: number,
+    minPushRank: number,
+    shouldPush: boolean,
+  ): boolean {
+    if (!last || now - last.at >= ALERT_COOLDOWN_MS) return false;
+    if (!shouldPush) return true;
+
+    // A lower-level feed row should not suppress the first push-eligible alert.
+    const lastRank = ALERT_LEVEL_RANK[last.alertLevel] ?? 0;
+    return lastRank >= minPushRank;
   }
 
   private buildTriggerReason(asset: AssetState): string {
