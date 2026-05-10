@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -22,12 +22,19 @@ const settingsSchema = z.object({
 });
 
 type SettingsFormValues = z.infer<typeof settingsSchema>;
+const ADMIN_TOKEN_STORAGE_KEY = "scannerAdminToken";
 
 export default function Settings() {
   const { data: settings, isLoading } = useGetSettings();
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [adminToken, setAdminToken] = useState(
+    () => window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) ?? "",
+  );
+  const [hasSavedAdminToken, setHasSavedAdminToken] = useState(
+    () => Boolean(window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)),
+  );
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -72,6 +79,27 @@ export default function Settings() {
     });
   };
 
+  const handleSaveAdminToken = () => {
+    const token = adminToken.trim();
+    if (token) {
+      window.localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+      setAdminToken(token);
+      setHasSavedAdminToken(true);
+      toast({
+        title: "Admin Token Saved",
+        description: "Protected API mutations will include this bearer token.",
+      });
+      return;
+    }
+
+    window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    setHasSavedAdminToken(false);
+    toast({
+      title: "Admin Token Cleared",
+      description: "Saving settings and sending test notifications now require a token.",
+    });
+  };
+
   const handleTestNotification = () => {
     testPushover.mutate(undefined, {
       onSuccess: (res) => {
@@ -106,6 +134,39 @@ export default function Settings() {
     <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
       <div className="max-w-2xl mx-auto w-full">
         <h1 className="text-2xl font-black uppercase tracking-tight text-foreground mb-8 border-b border-border pb-4">Scanner Configuration</h1>
+
+        <div className="bg-card border border-border rounded-lg p-6 space-y-4 mb-8">
+          <div>
+            <h2 className="text-sm font-bold text-primary uppercase tracking-widest">
+              Admin API Token
+            </h2>
+            <p className="text-sm text-muted-foreground mt-2">
+              Required for protected actions like saving settings, dismissing alerts, and sending test pushes.
+              Set the same value as <span className="font-mono text-foreground">SCANNER_ADMIN_TOKEN</span> on the API server.
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex-1 space-y-2">
+              <Label htmlFor="admin-token">Bearer token stored in this browser</Label>
+              <Input
+                id="admin-token"
+                type="password"
+                value={adminToken}
+                onChange={(e) => setAdminToken(e.target.value)}
+                placeholder={hasSavedAdminToken ? "Token saved" : "Paste admin token"}
+                className="font-mono bg-background"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleSaveAdminToken}
+              className="sm:self-end font-mono"
+            >
+              {adminToken.trim() ? "Save Token" : "Clear Token"}
+            </Button>
+          </div>
+        </div>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
