@@ -1,4 +1,4 @@
-import { useListAlerts, useDismissAlert } from "@workspace/api-client-react";
+import { getListAlertsQueryKey, useDismissAlert, useListAlerts } from "@workspace/api-client-react";
 import { formatTime } from "@/lib/format";
 import { LevelBadge } from "@/components/ui/level-badge";
 import { PulseNumber } from "@/components/ui/pulse-number";
@@ -8,9 +8,15 @@ import { useLocation } from "wouter";
 
 export default function Feed() {
   const [, setLocation] = useLocation();
+  const alertParams = { limit: 100 };
   const { data: alerts = [], refetch } = useListAlerts(
-    { limit: 100 },
-    { query: { refetchInterval: 5000 } }
+    alertParams,
+    {
+      query: {
+        queryKey: getListAlertsQueryKey(alertParams),
+        refetchInterval: 5000,
+      },
+    }
   );
   
   const dismissAlert = useDismissAlert();
@@ -82,9 +88,13 @@ export default function Feed() {
                   </button>
                 )}
                 {alert.pushoverSent ? (
-                  <BellRing className="h-4 w-4 text-primary" title="Pushover Sent" />
+                  <span title="Pushover Sent">
+                    <BellRing className="h-4 w-4 text-primary" />
+                  </span>
                 ) : (
-                  <BellOff className="h-4 w-4 text-muted-foreground" title="Pushover Not Sent" />
+                  <span title="Pushover Not Sent">
+                    <BellOff className="h-4 w-4 text-muted-foreground" />
+                  </span>
                 )}
               </div>
             </div>

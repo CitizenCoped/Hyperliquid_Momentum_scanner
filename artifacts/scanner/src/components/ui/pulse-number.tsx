@@ -24,6 +24,7 @@ export function PulseNumber({ value, formatFn = (v) => v.toString(), className, 
       prevValueRef.current = value;
       return () => clearTimeout(timer);
     }
+    return undefined;
   }, [value]);
 
   const colorClass = isPercent 

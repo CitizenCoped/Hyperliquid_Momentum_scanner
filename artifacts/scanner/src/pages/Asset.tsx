@@ -1,4 +1,9 @@
-import { useGetAsset, useListAlerts, getGetAssetQueryKey } from "@workspace/api-client-react";
+import {
+  getGetAssetQueryKey,
+  getListAlertsQueryKey,
+  useGetAsset,
+  useListAlerts,
+} from "@workspace/api-client-react";
 import { useParams } from "wouter";
 import { PulseNumber } from "@/components/ui/pulse-number";
 import { LevelBadge } from "@/components/ui/level-badge";
@@ -9,17 +14,26 @@ import { Link } from "wouter";
 export default function Asset() {
   const params = useParams<{ symbol: string }>();
   const symbol = params.symbol;
+  const assetSymbol = symbol || "";
+  const alertParams = { symbol: symbol ?? null, limit: 20 };
 
-  const { data: asset, isLoading } = useGetAsset(symbol || "", { 
+  const { data: asset, isLoading } = useGetAsset(assetSymbol, { 
     query: { 
+      queryKey: getGetAssetQueryKey(assetSymbol),
       enabled: !!symbol, 
       refetchInterval: 5000 
     } 
   });
 
   const { data: alerts = [] } = useListAlerts(
-    { symbol, limit: 20 },
-    { query: { enabled: !!symbol, refetchInterval: 10000 } }
+    alertParams,
+    {
+      query: {
+        queryKey: getListAlertsQueryKey(alertParams),
+        enabled: !!symbol,
+        refetchInterval: 10000,
+      },
+    }
   );
 
   if (isLoading && !asset) {
