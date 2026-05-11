@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
-import { Save, Bell, Loader2 } from "lucide-react";
+import { Save, Bell, Loader2, AlertTriangle } from "lucide-react";
 
 const settingsSchema = z.object({
   watchThreshold: z.coerce.number().min(0).max(100),
@@ -24,7 +24,7 @@ const settingsSchema = z.object({
 type SettingsFormValues = z.infer<typeof settingsSchema>;
 
 export default function Settings() {
-  const { data: settings, isLoading } = useGetSettings();
+  const { data: settings, error, isError, isFetching, isLoading, refetch } = useGetSettings();
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
@@ -55,6 +55,15 @@ export default function Settings() {
   }, [settings, form]);
 
   const onSubmit = (data: SettingsFormValues) => {
+    if (!settings) {
+      toast({
+        title: "Settings Not Loaded",
+        description: "Reload settings before saving changes.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     updateSettings.mutate({ data }, {
       onSuccess: () => {
         toast({
@@ -100,6 +109,37 @@ export default function Settings() {
 
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground font-mono">LOADING SETTINGS...</div>;
+  }
+
+  if (isError || !settings) {
+    return (
+      <div className="flex h-full items-center justify-center bg-background p-8">
+        <div className="max-w-md rounded-lg border border-destructive/40 bg-card p-6 text-center shadow-sm">
+          <AlertTriangle className="mx-auto mb-4 h-8 w-8 text-destructive" />
+          <h1 className="mb-2 text-xl font-black uppercase tracking-tight text-foreground">
+            Settings Unavailable
+          </h1>
+          <p className="mb-6 text-sm text-muted-foreground">
+            The current scanner configuration could not be loaded. Saving is disabled to avoid overwriting the live settings with defaults.
+          </p>
+          {error instanceof Error ? (
+            <p className="mb-6 rounded-md bg-muted p-3 text-left font-mono text-xs text-muted-foreground">
+              {error.message}
+            </p>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void refetch()}
+            disabled={isFetching}
+            className="font-bold uppercase tracking-widest"
+          >
+            {isFetching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Retry Loading Settings
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -203,7 +243,7 @@ export default function Settings() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Minimum Alert Level for Push</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger className="bg-background">
                             <SelectValue placeholder="Select a level" />
