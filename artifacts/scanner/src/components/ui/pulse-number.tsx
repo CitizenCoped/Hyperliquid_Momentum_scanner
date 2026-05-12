@@ -13,17 +13,21 @@ export function PulseNumber({ value, formatFn = (v) => v.toString(), className, 
   const [pulseClass, setPulseClass] = useState<string>('');
 
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
     if (value > prevValueRef.current) {
       setPulseClass('animate-flash-up');
-      const timer = setTimeout(() => setPulseClass(''), 1500);
+      timer = setTimeout(() => setPulseClass(''), 1500);
       prevValueRef.current = value;
-      return () => clearTimeout(timer);
     } else if (value < prevValueRef.current) {
       setPulseClass('animate-flash-down');
-      const timer = setTimeout(() => setPulseClass(''), 1500);
+      timer = setTimeout(() => setPulseClass(''), 1500);
       prevValueRef.current = value;
-      return () => clearTimeout(timer);
     }
+
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
   }, [value]);
 
   const colorClass = isPercent 
