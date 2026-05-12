@@ -9,7 +9,7 @@ interface LevelBadgeProps {
 
 export function LevelBadge({ level, className }: LevelBadgeProps) {
   let styleClass = '';
-  let label = level;
+  let label: string = level;
 
   switch (level) {
     case 'WATCH':
