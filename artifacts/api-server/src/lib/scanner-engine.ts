@@ -65,6 +65,7 @@ class ScannerEngine {
   private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private pollInFlight: Promise<void> | null = null;
   private currentIntervalSec = 15;
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
@@ -73,14 +74,22 @@ class ScannerEngine {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-    await this.ensureDefaultSettings();
-    const s = await this.getSettings();
-    this.currentIntervalSec = s.scanIntervalSeconds;
-    logger.info(
-      { intervalSec: this.currentIntervalSec },
-      "Scanner engine starting",
-    );
-    void this.runOnce();
+    try {
+      await this.ensureDefaultSettings();
+      const s = await this.getSettings();
+      this.currentIntervalSec = s.scanIntervalSeconds;
+      logger.info(
+        { intervalSec: this.currentIntervalSec },
+        "Scanner engine starting",
+      );
+      void this.runOnce();
+    } catch (err) {
+      this.lastError = err instanceof Error ? err.message : String(err);
+      logger.error(
+        { err, retryInSec: this.currentIntervalSec },
+        "Scanner startup initialization failed; retrying on next poll",
+      );
+    }
     this.scheduleNext();
   }
 
@@ -151,6 +160,21 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInFlight) {
+      return this.pollInFlight;
+    }
+    const poll = this.runPoll();
+    this.pollInFlight = poll;
+    try {
+      await poll;
+    } finally {
+      if (this.pollInFlight === poll) {
+        this.pollInFlight = null;
+      }
+    }
+  }
+
+  private async runPoll(): Promise<void> {
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
