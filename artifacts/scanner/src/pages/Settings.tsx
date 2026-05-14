@@ -24,7 +24,7 @@ const settingsSchema = z.object({
 type SettingsFormValues = z.infer<typeof settingsSchema>;
 
 export default function Settings() {
-  const { data: settings, isLoading } = useGetSettings();
+  const { data: settings, isError, isLoading, refetch } = useGetSettings();
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
@@ -100,6 +100,30 @@ export default function Settings() {
 
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground font-mono">LOADING SETTINGS...</div>;
+  }
+
+  if (isError || !settings) {
+    return (
+      <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
+        <div className="max-w-2xl mx-auto w-full">
+          <h1 className="text-2xl font-black uppercase tracking-tight text-foreground mb-8 border-b border-border pb-4">Scanner Configuration</h1>
+          <div className="bg-card border border-destructive rounded-lg p-6 space-y-4">
+            <h2 className="text-sm font-bold text-destructive uppercase tracking-widest">Settings Unavailable</h2>
+            <p className="text-sm text-muted-foreground">
+              The current scanner settings could not be loaded. Retry before editing so saved changes do not overwrite the live configuration with defaults.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void refetch()}
+              className="font-mono text-xs"
+            >
+              Retry Loading Settings
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
