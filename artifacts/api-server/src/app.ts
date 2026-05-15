@@ -27,10 +27,10 @@ app.use(
   }),
 );
 app.use(cors());
+app.use("/api", requireAdminAuth);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use("/api", requireAdminAuth);
 app.use("/api", router);
 
 export default app;
