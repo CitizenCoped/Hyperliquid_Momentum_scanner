@@ -40,7 +40,7 @@ A real-time setup-discovery tool for Hyperliquid perpetuals, inspired by Ross Ca
 - `artifacts/api-server/src/lib/scoring.ts` — port of the original Python scoring (`dayChange 0-20 + RVOL 0-25 + acceleration 0-20 + squeezeStructure 0-20 + catalyst 0-15`). Tiers: WATCH≥60, ACTIVE_SETUP≥75, A_PLUS_SETUP≥85.
 - `artifacts/api-server/src/lib/scanner-engine.ts` — background poller. Fetches market context for all 191 perps, persists snapshots, computes 15m/1h/4h price deltas + RVOL via SQL on history, refreshes L2 books for top 25 by volume. Alert cooldown (10min/symbol) is **DB-backed** via the `alerts` table, with an in-memory map as a fast-path optimization. Snapshot retention: 24h with periodic app-level cleanup.
 - `artifacts/api-server/src/lib/pushover.ts` — Pushover sender with severity-mapped priority.
-- `artifacts/api-server/src/routes/{scanner,alerts,settings}.ts` — REST routes wired in `routes/index.ts`. Settings PUT validates payload with Zod and enforces `watch <= active <= A+` invariant server-side.
+- `artifacts/api-server/src/routes/{scanner,alerts,settings}.ts` — REST routes wired in `routes/index.ts`. Settings PUT validates payload with Zod and enforces `watch <= active <= A+` invariant server-side. Mutating admin routes require a bearer token matching `SCANNER_ADMIN_TOKEN` (or `API_ADMIN_TOKEN` / `ADMIN_API_TOKEN`).
 
 ### Frontend
 - `artifacts/scanner/src/App.tsx` — wouter routes: `/` Board, `/feed` Live Trigger Feed, `/asset/:symbol` Asset Detail, `/settings` Settings.
@@ -50,4 +50,5 @@ A real-time setup-discovery tool for Hyperliquid perpetuals, inspired by Ross Ca
 ### Secrets used
 - `QUICKNODE_HTTP_URL`, `QUICKNODE_WSS_URL` — reserved for future streaming/gRPC enhancements.
 - `PUSHOVER_APP_TOKEN`, `PUSHOVER_USER_KEY` — push notifications.
+- `SCANNER_ADMIN_TOKEN` (or `API_ADMIN_TOKEN` / `ADMIN_API_TOKEN`) — bearer token for settings updates, alert dismissal, and test pushes.
 - `SESSION_SECRET`, `DATABASE_URL` — standard.
