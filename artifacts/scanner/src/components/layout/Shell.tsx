@@ -2,7 +2,12 @@ import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { Activity, LayoutDashboard, Settings as SettingsIcon, TerminalSquare } from "lucide-react";
-import { useHealthCheck, useGetScannerSummary } from "@workspace/api-client-react";
+import {
+  getGetScannerSummaryQueryKey,
+  getHealthCheckQueryKey,
+  useGetScannerSummary,
+  useHealthCheck,
+} from "@workspace/api-client-react";
 import { PulseNumber } from "../ui/pulse-number";
 import { formatNumber } from "@/lib/format";
 
@@ -12,8 +17,12 @@ interface ShellProps {
 
 export function Shell({ children }: ShellProps) {
   const [location] = useLocation();
-  const { data: health } = useHealthCheck({ query: { refetchInterval: 30000 } });
-  const { data: summary } = useGetScannerSummary({ query: { refetchInterval: 10000 } });
+  const { data: health } = useHealthCheck({
+    query: { queryKey: getHealthCheckQueryKey(), refetchInterval: 30000 },
+  });
+  const { data: summary } = useGetScannerSummary({
+    query: { queryKey: getGetScannerSummaryQueryKey(), refetchInterval: 10000 },
+  });
 
   const navItems = [
     { href: "/", label: "Board", icon: LayoutDashboard },
