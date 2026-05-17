@@ -138,7 +138,14 @@ class ScannerEngine {
   }
 
   getAsset(symbol: string): AssetState | null {
-    return this.state.get(symbol) ?? null;
+    const exact = this.state.get(symbol);
+    if (exact) return exact;
+
+    const normalized = symbol.toUpperCase();
+    for (const asset of this.state.values()) {
+      if (asset.symbol.toUpperCase() === normalized) return asset;
+    }
+    return null;
   }
 
   getStatus() {
