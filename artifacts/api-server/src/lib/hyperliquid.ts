@@ -108,17 +108,21 @@ const num = (s: string | null | undefined): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-export async function fetchPerpSnapshots(): Promise<HyperliquidAssetSnapshot[]> {
-  const data = (await postInfo(
-    { type: "metaAndAssetCtxs" },
-    { label: "metaAndAssetCtxs" },
-  )) as [HlMeta, HlAssetCtx[]];
+export function parsePerpSnapshots(data: unknown): HyperliquidAssetSnapshot[] {
   if (!Array.isArray(data) || data.length !== 2) {
     throw new Error("Unexpected metaAndAssetCtxs shape");
   }
   const [meta, ctxs] = data;
-  if (!meta?.universe || !Array.isArray(ctxs)) {
+  if (!meta || !Array.isArray(meta.universe) || !Array.isArray(ctxs)) {
     throw new Error("Missing universe or contexts");
+  }
+  if (meta.universe.length === 0) {
+    throw new Error("Hyperliquid returned an empty perp universe");
+  }
+  if (ctxs.length !== meta.universe.length) {
+    throw new Error(
+      `Hyperliquid context count ${ctxs.length} did not match universe count ${meta.universe.length}`,
+    );
   }
 
   const out: HyperliquidAssetSnapshot[] = [];
@@ -144,7 +148,18 @@ export async function fetchPerpSnapshots(): Promise<HyperliquidAssetSnapshot[]> 
       maxLeverage: u.maxLeverage,
     });
   }
+  if (out.length === 0) {
+    throw new Error("Hyperliquid returned no active perp snapshots");
+  }
   return out;
+}
+
+export async function fetchPerpSnapshots(): Promise<HyperliquidAssetSnapshot[]> {
+  const data = await postInfo(
+    { type: "metaAndAssetCtxs" },
+    { label: "metaAndAssetCtxs" },
+  );
+  return parsePerpSnapshots(data);
 }
 
 export interface L2Level {
