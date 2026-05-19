@@ -108,23 +108,28 @@ const num = (s: string | null | undefined): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-export async function fetchPerpSnapshots(): Promise<HyperliquidAssetSnapshot[]> {
-  const data = (await postInfo(
-    { type: "metaAndAssetCtxs" },
-    { label: "metaAndAssetCtxs" },
-  )) as [HlMeta, HlAssetCtx[]];
+export function parsePerpSnapshots(data: unknown): HyperliquidAssetSnapshot[] {
   if (!Array.isArray(data) || data.length !== 2) {
     throw new Error("Unexpected metaAndAssetCtxs shape");
   }
   const [meta, ctxs] = data;
-  if (!meta?.universe || !Array.isArray(ctxs)) {
+  const universe = (meta as HlMeta | undefined)?.universe;
+  if (!Array.isArray(universe) || !Array.isArray(ctxs)) {
     throw new Error("Missing universe or contexts");
+  }
+  if (universe.length === 0) {
+    throw new Error("Hyperliquid returned an empty perp universe");
+  }
+  if (ctxs.length !== universe.length) {
+    throw new Error(
+      `Hyperliquid context count ${ctxs.length} did not match universe count ${universe.length}`,
+    );
   }
 
   const out: HyperliquidAssetSnapshot[] = [];
-  for (let i = 0; i < meta.universe.length; i++) {
-    const u = meta.universe[i];
-    const c = ctxs[i];
+  for (let i = 0; i < universe.length; i++) {
+    const u = universe[i];
+    const c = ctxs[i] as HlAssetCtx | undefined;
     if (!u || !c || u.isDelisted) continue;
     const markPrice = num(c.markPx);
     if (markPrice <= 0) continue;
@@ -144,7 +149,18 @@ export async function fetchPerpSnapshots(): Promise<HyperliquidAssetSnapshot[]> 
       maxLeverage: u.maxLeverage,
     });
   }
+  if (out.length === 0) {
+    throw new Error("Hyperliquid returned no active perp snapshots");
+  }
   return out;
+}
+
+export async function fetchPerpSnapshots(): Promise<HyperliquidAssetSnapshot[]> {
+  const data = await postInfo(
+    { type: "metaAndAssetCtxs" },
+    { label: "metaAndAssetCtxs" },
+  );
+  return parsePerpSnapshots(data);
 }
 
 export interface L2Level {
