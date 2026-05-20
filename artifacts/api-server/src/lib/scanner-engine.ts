@@ -69,6 +69,7 @@ class ScannerEngine {
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
   private pollCount = 0;
+  private pollInFlight = false;
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -80,8 +81,7 @@ class ScannerEngine {
       { intervalSec: this.currentIntervalSec },
       "Scanner engine starting",
     );
-    void this.runOnce();
-    this.scheduleNext();
+    void this.runOnce().finally(() => this.scheduleNext());
   }
 
   stop(): void {
@@ -138,7 +138,14 @@ class ScannerEngine {
   }
 
   getAsset(symbol: string): AssetState | null {
-    return this.state.get(symbol) ?? null;
+    const exact = this.state.get(symbol);
+    if (exact) return exact;
+    const requested = symbol.toLowerCase();
+    return (
+      Array.from(this.state.values()).find(
+        (asset) => asset.symbol.toLowerCase() === requested,
+      ) ?? null
+    );
   }
 
   getStatus() {
@@ -151,6 +158,12 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn("Scanner poll skipped because previous poll is still running");
+      return;
+    }
+
+    this.pollInFlight = true;
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
@@ -264,6 +277,8 @@ class ScannerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err }, "Scanner poll failed");
+    } finally {
+      this.pollInFlight = false;
     }
   }
 

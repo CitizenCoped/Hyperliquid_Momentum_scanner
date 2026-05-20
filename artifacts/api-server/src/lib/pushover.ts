@@ -1,6 +1,7 @@
 import { logger } from "./logger";
 
 const PUSHOVER_URL = "https://api.pushover.net/1/messages.json";
+const PUSHOVER_TIMEOUT_MS = 8000;
 
 export interface PushoverMessage {
   title: string;
@@ -22,6 +23,8 @@ export async function sendPushover(msg: PushoverMessage): Promise<{
       message: "PUSHOVER_APP_TOKEN or PUSHOVER_USER_KEY not configured",
     };
   }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PUSHOVER_TIMEOUT_MS);
   try {
     const body = new URLSearchParams({
       token,
@@ -37,6 +40,7 @@ export async function sendPushover(msg: PushoverMessage): Promise<{
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
+      signal: controller.signal,
     });
     const data = (await res.json().catch(() => ({}))) as {
       status?: number;
@@ -54,5 +58,7 @@ export async function sendPushover(msg: PushoverMessage): Promise<{
       success: false,
       message: err instanceof Error ? err.message : "Unknown error",
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
