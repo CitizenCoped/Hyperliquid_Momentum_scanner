@@ -5,7 +5,7 @@ import {
   settings as settingsTable,
   type Settings,
 } from "@workspace/db/schema";
-import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import {
   fetchL2Book,
@@ -52,6 +52,8 @@ const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const BOOK_REFRESH_INTERVAL_MS = 60 * 1000;
 const SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const TOP_N_FOR_BOOK_DETAILS = 25;
+const SETTINGS_LOCK_KEY = 4_376_001;
+const ALERT_LOCK_NAMESPACE = 4_376_002;
 
 interface BookCacheEntry {
   spreadBps: number;
@@ -69,19 +71,30 @@ class ScannerEngine {
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
   private pollCount = 0;
+  private starting = false;
+  private pollInFlight = false;
 
   async start(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
-    await this.ensureDefaultSettings();
-    const s = await this.getSettings();
-    this.currentIntervalSec = s.scanIntervalSeconds;
-    logger.info(
-      { intervalSec: this.currentIntervalSec },
-      "Scanner engine starting",
-    );
-    void this.runOnce();
-    this.scheduleNext();
+    if (this.running || this.starting) return;
+    this.starting = true;
+    try {
+      await this.ensureDefaultSettings();
+      const s = await this.getSettings();
+      this.currentIntervalSec = s.scanIntervalSeconds;
+      this.running = true;
+      logger.info(
+        { intervalSec: this.currentIntervalSec },
+        "Scanner engine starting",
+      );
+      void this.runOnceIfIdle().finally(() => this.scheduleNext());
+    } catch (err) {
+      this.running = false;
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = null;
+      throw err;
+    } finally {
+      this.starting = false;
+    }
   }
 
   stop(): void {
@@ -94,27 +107,44 @@ class ScannerEngine {
     if (!this.running) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
-      void this.runOnce().finally(() => this.scheduleNext());
+      void this.runOnceIfIdle().finally(() => this.scheduleNext());
     }, this.currentIntervalSec * 1000);
   }
 
   private async ensureDefaultSettings(): Promise<void> {
-    const existing = await db.select().from(settingsTable).limit(1);
-    if (existing.length === 0) {
-      await db.insert(settingsTable).values({});
-    }
+    await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(${SETTINGS_LOCK_KEY}::integer)`,
+      );
+      const existing = await tx
+        .select({ id: settingsTable.id })
+        .from(settingsTable)
+        .orderBy(asc(settingsTable.id))
+        .limit(1);
+      if (existing.length === 0) {
+        await tx.insert(settingsTable).values({});
+      }
+    });
   }
 
   async getSettings(): Promise<Settings> {
     await this.ensureDefaultSettings();
-    const [row] = await db.select().from(settingsTable).limit(1);
+    const [row] = await db
+      .select()
+      .from(settingsTable)
+      .orderBy(asc(settingsTable.id))
+      .limit(1);
     if (!row) throw new Error("Settings row missing after ensure");
     return row;
   }
 
   async updateSettings(patch: Partial<Settings>): Promise<Settings> {
     await this.ensureDefaultSettings();
-    const [existing] = await db.select().from(settingsTable).limit(1);
+    const [existing] = await db
+      .select()
+      .from(settingsTable)
+      .orderBy(asc(settingsTable.id))
+      .limit(1);
     if (!existing) throw new Error("Settings row missing");
     const updates: Partial<Settings> = { ...patch };
     delete updates.id;
@@ -129,6 +159,21 @@ class ScannerEngine {
       this.scheduleNext();
     }
     return updated;
+  }
+
+  private async runOnceIfIdle(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn(
+        "Skipping scanner poll because the previous poll is still running",
+      );
+      return;
+    }
+    this.pollInFlight = true;
+    try {
+      await this.runOnce();
+    } finally {
+      this.pollInFlight = false;
+    }
   }
 
   getAssets(): AssetState[] {
@@ -463,7 +508,7 @@ class ScannerEngine {
     if (candidates.length === 0) return;
 
     // DB-backed cooldown: pull most recent alert per symbol within the window.
-    // Survives restarts, scales to multiple workers (one row per fire).
+    // Each candidate is rechecked under an advisory lock before inserting.
     const recent = await db.execute<{ symbol: string; created_at: Date }>(sql`
       SELECT DISTINCT ON (symbol) symbol, created_at
       FROM alerts
@@ -489,31 +534,94 @@ class ScannerEngine {
         continue;
       }
 
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       const triggerReason = this.buildTriggerReason(asset);
-      let pushoverSent = false;
+      const claimed = await this.claimAlert(asset, triggerReason, now, cutoff);
+      if (!claimed.insertedId) {
+        if (claimed.lastAlertAt) {
+          this.lastAlertAt.set(asset.symbol, claimed.lastAlertAt);
+        }
+        continue;
+      }
+
+      this.lastAlertAt.set(asset.symbol, claimed.alertAt);
+      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       if (settings.pushoverEnabled && rank >= minRank) {
         const result = await sendPushover({
           title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
           message: triggerReason,
           priority: asset.alertLevel === "A_PLUS_SETUP" ? 1 : 0,
         });
-        pushoverSent = result.success;
+        if (result.success) {
+          try {
+            await db
+              .update(alertsTable)
+              .set({ pushoverSent: true })
+              .where(eq(alertsTable.id, claimed.insertedId));
+          } catch (err) {
+            logger.warn(
+              { err, alertId: claimed.insertedId, symbol: asset.symbol },
+              "Failed to mark Pushover alert as sent",
+            );
+          }
+        }
+      }
+    }
+  }
+
+  private async claimAlert(
+    asset: AssetState,
+    triggerReason: string,
+    now: number,
+    cutoff: Date,
+  ): Promise<
+    | { insertedId: number; alertAt: number; lastAlertAt?: never }
+    | { insertedId: null; alertAt?: never; lastAlertAt: number | null }
+  > {
+    return db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(${ALERT_LOCK_NAMESPACE}::integer, hashtext(${asset.symbol}))`,
+      );
+
+      const recent = await tx.execute<{ created_at: Date | string }>(sql`
+        SELECT created_at
+        FROM alerts
+        WHERE symbol = ${asset.symbol}
+          AND created_at >= ${cutoff}
+        ORDER BY created_at DESC
+        LIMIT 1
+      `);
+      const recentRow = recent.rows[0];
+      if (recentRow) {
+        const createdAt =
+          recentRow.created_at instanceof Date
+            ? recentRow.created_at
+            : new Date(recentRow.created_at);
+        return {
+          insertedId: null,
+          lastAlertAt: Number.isFinite(createdAt.getTime())
+            ? createdAt.getTime()
+            : null,
+        };
       }
 
-      await db.insert(alertsTable).values({
-        symbol: asset.symbol,
-        alertLevel: asset.alertLevel,
-        setupScore: asset.setupScore,
-        triggerReason,
-        markPrice: asset.markPrice,
-        dayChangePct: asset.dayChangePct,
-        rvol: asset.dailyRvol,
-        pushoverSent,
-        scoreBreakdown: asset.scoreBreakdown,
-      });
-      this.lastAlertAt.set(asset.symbol, now);
-    }
+      const [inserted] = await tx
+        .insert(alertsTable)
+        .values({
+          symbol: asset.symbol,
+          alertLevel: asset.alertLevel,
+          setupScore: asset.setupScore,
+          triggerReason,
+          markPrice: asset.markPrice,
+          dayChangePct: asset.dayChangePct,
+          rvol: asset.dailyRvol,
+          pushoverSent: false,
+          scoreBreakdown: asset.scoreBreakdown,
+          createdAt: new Date(now),
+        })
+        .returning({ id: alertsTable.id });
+      if (!inserted) throw new Error("Failed to claim alert");
+      return { insertedId: inserted.id, alertAt: now };
+    });
   }
 
   private buildTriggerReason(asset: AssetState): string {
@@ -608,6 +716,3 @@ class ScannerEngine {
 }
 
 export const scanner = new ScannerEngine();
-
-// Suppress unused import warning for `gte` (kept for future use)
-void gte;
