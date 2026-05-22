@@ -15,6 +15,11 @@ import {
 } from "./hyperliquid";
 import { sendPushover } from "./pushover";
 import {
+  ALERT_LEVEL_RANK,
+  alertRank,
+  shouldFireAlertForTransition,
+} from "./alerting";
+import {
   totalSetupScore,
   type AlertLevel,
   type ScoreBreakdown,
@@ -41,13 +46,6 @@ export interface AssetState {
   updatedAt: string;
 }
 
-const ALERT_LEVEL_RANK: Record<string, number> = {
-  IGNORE: 0,
-  WATCH: 1,
-  ACTIVE_SETUP: 2,
-  A_PLUS_SETUP: 3,
-};
-
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const BOOK_REFRESH_INTERVAL_MS = 60 * 1000;
 const SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -69,6 +67,7 @@ class ScannerEngine {
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
   private pollCount = 0;
+  private pollInFlight: Promise<void> | null = null;
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -151,10 +150,28 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn("Skipping scanner poll because the previous poll is still running");
+      return;
+    }
+
+    const poll = this.runPoll();
+    this.pollInFlight = poll;
+    try {
+      await poll;
+    } finally {
+      if (this.pollInFlight === poll) {
+        this.pollInFlight = null;
+      }
+    }
+  }
+
+  private async runPoll(): Promise<void> {
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
       const polledAt = new Date();
+      const previousState = this.state;
 
       // Persist snapshots (chunk insert)
       const insertRows = snapshots.map((s) => ({
@@ -255,7 +272,7 @@ class ScannerEngine {
       void this.refreshTopBooks(snapshots);
 
       // Trigger alerts
-      await this.maybeFireAlerts(settings);
+      await this.maybeFireAlerts(settings, previousState);
 
       // Periodic cleanup
       if (this.pollCount % 20 === 0) {
@@ -444,17 +461,27 @@ class ScannerEngine {
     }
   }
 
-  private async maybeFireAlerts(settings: Settings): Promise<void> {
+  private async maybeFireAlerts(
+    settings: Settings,
+    previousState: Map<string, AssetState>,
+  ): Promise<void> {
     if (this.state.size === 0) return;
-    const minRank = ALERT_LEVEL_RANK[settings.minAlertLevel] ?? 2;
+    const minRank = alertRank(
+      settings.minAlertLevel,
+      ALERT_LEVEL_RANK.ACTIVE_SETUP,
+    );
     const now = Date.now();
     const cutoff = new Date(now - ALERT_COOLDOWN_MS);
 
     // Build the candidate set first so we can do one DB lookup for all symbols.
     const candidates: AssetState[] = [];
     for (const asset of this.state.values()) {
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
+      const rank = alertRank(asset.alertLevel);
       if (rank < ALERT_LEVEL_RANK.WATCH) continue;
+      const previous = previousState.get(asset.symbol);
+      if (!shouldFireAlertForTransition(previous?.alertLevel, asset.alertLevel)) {
+        continue;
+      }
       // Fast in-memory short-circuit; durable DB check happens below.
       const lastInMem = this.lastAlertAt.get(asset.symbol) ?? 0;
       if (now - lastInMem < ALERT_COOLDOWN_MS) continue;
@@ -489,7 +516,7 @@ class ScannerEngine {
         continue;
       }
 
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
+      const rank = alertRank(asset.alertLevel);
       const triggerReason = this.buildTriggerReason(asset);
       let pushoverSent = false;
       if (settings.pushoverEnabled && rank >= minRank) {
