@@ -15,6 +15,11 @@ import {
 } from "./hyperliquid";
 import { sendPushover } from "./pushover";
 import {
+  ALERT_LEVEL_RANK,
+  alertLevelRank,
+  shouldCreateActivationAlert,
+} from "./alerting";
+import {
   totalSetupScore,
   type AlertLevel,
   type ScoreBreakdown,
@@ -41,13 +46,6 @@ export interface AssetState {
   updatedAt: string;
 }
 
-const ALERT_LEVEL_RANK: Record<string, number> = {
-  IGNORE: 0,
-  WATCH: 1,
-  ACTIVE_SETUP: 2,
-  A_PLUS_SETUP: 3,
-};
-
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const BOOK_REFRESH_INTERVAL_MS = 60 * 1000;
 const SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -63,6 +61,7 @@ class ScannerEngine {
   private state = new Map<string, AssetState>();
   private bookCache = new Map<string, BookCacheEntry>();
   private lastAlertAt = new Map<string, number>();
+  private lastObservedAlertRanks = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private currentIntervalSec = 15;
@@ -445,22 +444,41 @@ class ScannerEngine {
   }
 
   private async maybeFireAlerts(settings: Settings): Promise<void> {
-    if (this.state.size === 0) return;
-    const minRank = ALERT_LEVEL_RANK[settings.minAlertLevel] ?? 2;
+    if (this.state.size === 0) {
+      this.lastObservedAlertRanks.clear();
+      return;
+    }
+    const minRank =
+      alertLevelRank(settings.minAlertLevel) || ALERT_LEVEL_RANK.ACTIVE_SETUP;
     const now = Date.now();
     const cutoff = new Date(now - ALERT_COOLDOWN_MS);
+    const observedRanks = new Map<string, number>();
 
-    // Build the candidate set first so we can do one DB lookup for all symbols.
+    // Only alert on observed tier activations/escalations. The first scan is a
+    // baseline so restarts do not replay every already-active symbol.
     const candidates: AssetState[] = [];
     for (const asset of this.state.values()) {
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
-      if (rank < ALERT_LEVEL_RANK.WATCH) continue;
+      const rank = alertLevelRank(asset.alertLevel);
+      observedRanks.set(asset.symbol, rank);
+      const previousRank = this.lastObservedAlertRanks.get(asset.symbol);
+      if (
+        !shouldCreateActivationAlert({
+          currentRank: rank,
+          previousRank,
+          minRank,
+        })
+      ) {
+        continue;
+      }
       // Fast in-memory short-circuit; durable DB check happens below.
       const lastInMem = this.lastAlertAt.get(asset.symbol) ?? 0;
       if (now - lastInMem < ALERT_COOLDOWN_MS) continue;
       candidates.push(asset);
     }
-    if (candidates.length === 0) return;
+    if (candidates.length === 0) {
+      this.lastObservedAlertRanks = observedRanks;
+      return;
+    }
 
     // DB-backed cooldown: pull most recent alert per symbol within the window.
     // Survives restarts, scales to multiple workers (one row per fire).
@@ -489,7 +507,7 @@ class ScannerEngine {
         continue;
       }
 
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
+      const rank = alertLevelRank(asset.alertLevel);
       const triggerReason = this.buildTriggerReason(asset);
       let pushoverSent = false;
       if (settings.pushoverEnabled && rank >= minRank) {
@@ -514,6 +532,7 @@ class ScannerEngine {
       });
       this.lastAlertAt.set(asset.symbol, now);
     }
+    this.lastObservedAlertRanks = observedRanks;
   }
 
   private buildTriggerReason(asset: AssetState): string {
