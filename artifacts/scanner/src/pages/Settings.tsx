@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { Save, Bell, Loader2 } from "lucide-react";
+import { getStoredAdminToken, storeAdminToken } from "@/lib/admin-auth";
 
 const settingsSchema = z.object({
   watchThreshold: z.coerce.number().min(0).max(100),
@@ -28,6 +29,7 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [adminToken, setAdminToken] = useState(() => getStoredAdminToken());
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -65,7 +67,7 @@ export default function Settings() {
       onError: (err) => {
         toast({
           title: "Error",
-          description: "Failed to save settings.",
+          description: err instanceof Error ? err.message : "Failed to save settings.",
           variant: "destructive",
         });
       }
@@ -91,7 +93,7 @@ export default function Settings() {
       onError: () => {
         toast({
           title: "Error",
-          description: "Failed to connect to Pushover API.",
+          description: "Failed to connect to Pushover API. Check the admin token.",
           variant: "destructive",
         });
       }
@@ -106,6 +108,27 @@ export default function Settings() {
     <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
       <div className="max-w-2xl mx-auto w-full">
         <h1 className="text-2xl font-black uppercase tracking-tight text-foreground mb-8 border-b border-border pb-4">Scanner Configuration</h1>
+
+        <div className="bg-card border border-border rounded-lg p-6 space-y-3 mb-8">
+          <Label htmlFor="admin-token" className="text-sm font-bold text-primary uppercase tracking-widest">
+            Admin Token
+          </Label>
+          <Input
+            id="admin-token"
+            type="password"
+            value={adminToken}
+            onChange={(event) => {
+              setAdminToken(event.target.value);
+              storeAdminToken(event.target.value);
+            }}
+            placeholder="Required to save settings, dismiss alerts, or send tests"
+            className="font-mono bg-background"
+            autoComplete="off"
+          />
+          <p className="text-xs text-muted-foreground">
+            Use the server's SCANNER_ADMIN_TOKEN, ADMIN_API_TOKEN, or SESSION_SECRET value. The token stays in this browser's local storage and is sent as a bearer token for admin actions.
+          </p>
+        </div>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">

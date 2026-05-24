@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { scanner } from "../lib/scanner-engine";
 import { sendPushover } from "../lib/pushover";
+import { requireAdminAuth } from "../lib/admin-auth";
 
 const router: IRouter = Router();
 
@@ -56,7 +57,7 @@ router.get("/alerts/:id", async (req, res) => {
   res.json(serializeAlert(row));
 });
 
-router.post("/alerts/:id/dismiss", async (req, res) => {
+router.post("/alerts/:id/dismiss", requireAdminAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
     res.status(400).json({ error: "invalid id" });
@@ -70,7 +71,7 @@ router.post("/alerts/:id/dismiss", async (req, res) => {
   res.json(serializeAlert(row));
 });
 
-router.post("/alerts/test-pushover", async (_req, res) => {
+router.post("/alerts/test-pushover", requireAdminAuth, async (_req, res) => {
   const result = await sendPushover({
     title: "Hyperliquid Scanner Test",
     message: "Pushover is wired up correctly.",

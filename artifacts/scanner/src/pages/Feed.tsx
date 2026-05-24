@@ -3,11 +3,13 @@ import { formatTime } from "@/lib/format";
 import { LevelBadge } from "@/components/ui/level-badge";
 import { PulseNumber } from "@/components/ui/pulse-number";
 import { formatPercent, formatNumber } from "@/lib/format";
+import { useToast } from "@/hooks/use-toast";
 import { BellRing, Check, BellOff } from "lucide-react";
 import { useLocation } from "wouter";
 
 export default function Feed() {
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
   const { data: alerts = [], refetch } = useListAlerts(
     { limit: 100 },
     { query: { refetchInterval: 5000 } }
@@ -18,7 +20,14 @@ export default function Feed() {
   const handleDismiss = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
     dismissAlert.mutate({ id }, {
-      onSuccess: () => refetch()
+      onSuccess: () => refetch(),
+      onError: (err) => {
+        toast({
+          title: "Dismiss failed",
+          description: err instanceof Error ? err.message : "Check the admin token in Settings.",
+          variant: "destructive",
+        });
+      },
     });
   };
 
