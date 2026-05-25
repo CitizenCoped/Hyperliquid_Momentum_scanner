@@ -23,8 +23,26 @@ const settingsSchema = z.object({
 
 type SettingsFormValues = z.infer<typeof settingsSchema>;
 
+function settingsToFormValues(settings: {
+  watchThreshold: number;
+  activeSetupThreshold: number;
+  aPlusThreshold: number;
+  pushoverEnabled: boolean;
+  minAlertLevel: string;
+  scanIntervalSeconds: number;
+}): SettingsFormValues {
+  return {
+    watchThreshold: settings.watchThreshold,
+    activeSetupThreshold: settings.activeSetupThreshold,
+    aPlusThreshold: settings.aPlusThreshold,
+    pushoverEnabled: settings.pushoverEnabled,
+    minAlertLevel: settings.minAlertLevel as SettingsFormValues["minAlertLevel"],
+    scanIntervalSeconds: settings.scanIntervalSeconds,
+  };
+}
+
 export default function Settings() {
-  const { data: settings, isLoading } = useGetSettings();
+  const { data: settings, isLoading, isError, isFetching, refetch } = useGetSettings();
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
@@ -40,23 +58,18 @@ export default function Settings() {
       scanIntervalSeconds: 10,
     }
   });
+  const { isDirty } = form.formState;
 
   useEffect(() => {
-    if (settings) {
-      form.reset({
-        watchThreshold: settings.watchThreshold,
-        activeSetupThreshold: settings.activeSetupThreshold,
-        aPlusThreshold: settings.aPlusThreshold,
-        pushoverEnabled: settings.pushoverEnabled,
-        minAlertLevel: settings.minAlertLevel as any,
-        scanIntervalSeconds: settings.scanIntervalSeconds,
-      });
+    if (settings && !isDirty) {
+      form.reset(settingsToFormValues(settings));
     }
-  }, [settings, form]);
+  }, [settings, form, isDirty]);
 
   const onSubmit = (data: SettingsFormValues) => {
     updateSettings.mutate({ data }, {
-      onSuccess: () => {
+      onSuccess: (updated) => {
+        form.reset(settingsToFormValues(updated));
         toast({
           title: "Settings Saved",
           description: "Scanner settings have been updated.",
@@ -100,6 +113,25 @@ export default function Settings() {
 
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground font-mono">LOADING SETTINGS...</div>;
+  }
+
+  if (!settings) {
+    return (
+      <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
+        <div className="max-w-2xl mx-auto w-full bg-card border border-destructive/40 rounded-lg p-6 space-y-4">
+          <h1 className="text-xl font-black uppercase tracking-tight text-destructive">Settings Unavailable</h1>
+          <p className="text-sm text-muted-foreground">
+            {isError
+              ? "The current scanner settings could not be loaded. Saving is disabled to avoid overwriting live configuration with defaults."
+              : "Scanner settings are not available yet. Try loading them again before making changes."}
+          </p>
+          <Button type="button" variant="outline" onClick={() => void refetch()} disabled={isFetching}>
+            {isFetching ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -203,7 +235,7 @@ export default function Settings() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Minimum Alert Level for Push</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger className="bg-background">
                             <SelectValue placeholder="Select a level" />
@@ -251,7 +283,7 @@ export default function Settings() {
               <Button 
                 type="submit" 
                 size="lg" 
-                disabled={updateSettings.isPending}
+                disabled={updateSettings.isPending || !settings}
                 className="font-bold tracking-widest uppercase px-8"
               >
                 {updateSettings.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
