@@ -59,12 +59,18 @@ interface BookCacheEntry {
   fetchedAt: number;
 }
 
+interface AlertCooldownEntry {
+  firedAt: number;
+  rank: number;
+}
+
 class ScannerEngine {
   private state = new Map<string, AssetState>();
   private bookCache = new Map<string, BookCacheEntry>();
-  private lastAlertAt = new Map<string, number>();
+  private lastAlertAt = new Map<string, AlertCooldownEntry>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private pollInProgress = false;
   private currentIntervalSec = 15;
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
@@ -80,8 +86,7 @@ class ScannerEngine {
       { intervalSec: this.currentIntervalSec },
       "Scanner engine starting",
     );
-    void this.runOnce();
-    this.scheduleNext();
+    void this.runOnce().finally(() => this.scheduleNext());
   }
 
   stop(): void {
@@ -151,6 +156,13 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInProgress) {
+      logger.warn(
+        "Scanner poll skipped because the previous poll is still running",
+      );
+      return;
+    }
+    this.pollInProgress = true;
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
@@ -264,6 +276,8 @@ class ScannerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err }, "Scanner poll failed");
+    } finally {
+      this.pollInProgress = false;
     }
   }
 
@@ -456,40 +470,59 @@ class ScannerEngine {
       const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       if (rank < ALERT_LEVEL_RANK.WATCH) continue;
       // Fast in-memory short-circuit; durable DB check happens below.
-      const lastInMem = this.lastAlertAt.get(asset.symbol) ?? 0;
-      if (now - lastInMem < ALERT_COOLDOWN_MS) continue;
+      const lastInMem = this.lastAlertAt.get(asset.symbol);
+      if (
+        lastInMem &&
+        now - lastInMem.firedAt < ALERT_COOLDOWN_MS &&
+        rank <= lastInMem.rank
+      ) {
+        continue;
+      }
       candidates.push(asset);
     }
     if (candidates.length === 0) return;
 
     // DB-backed cooldown: pull most recent alert per symbol within the window.
     // Survives restarts, scales to multiple workers (one row per fire).
-    const recent = await db.execute<{ symbol: string; created_at: Date }>(sql`
-      SELECT DISTINCT ON (symbol) symbol, created_at
+    const recent = await db.execute<{
+      symbol: string;
+      alert_level: string;
+      created_at: Date;
+    }>(sql`
+      SELECT DISTINCT ON (symbol) symbol, alert_level, created_at
       FROM alerts
       WHERE created_at >= ${cutoff}
       ORDER BY symbol, created_at DESC
     `);
-    const recentBySymbol = new Map<string, Date>();
+    const recentBySymbol = new Map<string, AlertCooldownEntry>();
     for (const r of recent.rows as unknown as Array<{
       symbol: string;
+      alert_level: string;
       created_at: Date | string;
     }>) {
-      recentBySymbol.set(
-        r.symbol,
-        r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
-      );
+      const firedAt =
+        r.created_at instanceof Date
+          ? r.created_at.getTime()
+          : new Date(r.created_at).getTime();
+      recentBySymbol.set(r.symbol, {
+        firedAt,
+        rank: ALERT_LEVEL_RANK[r.alert_level] ?? 0,
+      });
     }
 
     for (const asset of candidates) {
       const lastDb = recentBySymbol.get(asset.symbol);
-      if (lastDb && now - lastDb.getTime() < ALERT_COOLDOWN_MS) {
+      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
+      if (
+        lastDb &&
+        now - lastDb.firedAt < ALERT_COOLDOWN_MS &&
+        rank <= lastDb.rank
+      ) {
         // Backfill in-memory cache so future cycles short-circuit.
-        this.lastAlertAt.set(asset.symbol, lastDb.getTime());
+        this.lastAlertAt.set(asset.symbol, lastDb);
         continue;
       }
 
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       const triggerReason = this.buildTriggerReason(asset);
       let pushoverSent = false;
       if (settings.pushoverEnabled && rank >= minRank) {
@@ -512,7 +545,7 @@ class ScannerEngine {
         pushoverSent,
         scoreBreakdown: asset.scoreBreakdown,
       });
-      this.lastAlertAt.set(asset.symbol, now);
+      this.lastAlertAt.set(asset.symbol, { firedAt: now, rank });
     }
   }
 
