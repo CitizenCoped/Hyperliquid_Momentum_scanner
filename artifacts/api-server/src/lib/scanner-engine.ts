@@ -65,6 +65,7 @@ class ScannerEngine {
   private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private pollInProgress = false;
   private currentIntervalSec = 15;
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
@@ -80,8 +81,7 @@ class ScannerEngine {
       { intervalSec: this.currentIntervalSec },
       "Scanner engine starting",
     );
-    void this.runOnce();
-    this.scheduleNext();
+    void this.runOnce().finally(() => this.scheduleNext());
   }
 
   stop(): void {
@@ -151,6 +151,12 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInProgress) {
+      logger.warn("Scanner poll skipped because previous poll is still running");
+      return;
+    }
+
+    this.pollInProgress = true;
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
@@ -264,6 +270,8 @@ class ScannerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err }, "Scanner poll failed");
+    } finally {
+      this.pollInProgress = false;
     }
   }
 
@@ -489,31 +497,88 @@ class ScannerEngine {
         continue;
       }
 
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       const triggerReason = this.buildTriggerReason(asset);
-      let pushoverSent = false;
+      const insertedId = await this.tryInsertAlertWithCooldown(
+        asset,
+        triggerReason,
+        cutoff,
+      );
+      if (!insertedId) continue;
+
+      this.lastAlertAt.set(asset.symbol, now);
+
+      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       if (settings.pushoverEnabled && rank >= minRank) {
         const result = await sendPushover({
           title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
           message: triggerReason,
           priority: asset.alertLevel === "A_PLUS_SETUP" ? 1 : 0,
         });
-        pushoverSent = result.success;
+
+        if (result.success) {
+          try {
+            await db
+              .update(alertsTable)
+              .set({ pushoverSent: true })
+              .where(eq(alertsTable.id, insertedId));
+          } catch (err) {
+            logger.warn(
+              { err, alertId: insertedId },
+              "Failed to mark Pushover alert as sent",
+            );
+          }
+        }
+      }
+    }
+  }
+
+  private async tryInsertAlertWithCooldown(
+    asset: AssetState,
+    triggerReason: string,
+    cutoff: Date,
+  ): Promise<number | null> {
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(
+          hashtext('hyperliquid_scanner_alert'),
+          hashtext(${asset.symbol})
+        )
+      `);
+
+      const [recent] = await tx
+        .select({ createdAt: alertsTable.createdAt })
+        .from(alertsTable)
+        .where(
+          and(
+            eq(alertsTable.symbol, asset.symbol),
+            gte(alertsTable.createdAt, cutoff),
+          ),
+        )
+        .orderBy(desc(alertsTable.createdAt))
+        .limit(1);
+
+      if (recent) {
+        this.lastAlertAt.set(asset.symbol, recent.createdAt.getTime());
+        return null;
       }
 
-      await db.insert(alertsTable).values({
-        symbol: asset.symbol,
-        alertLevel: asset.alertLevel,
-        setupScore: asset.setupScore,
-        triggerReason,
-        markPrice: asset.markPrice,
-        dayChangePct: asset.dayChangePct,
-        rvol: asset.dailyRvol,
-        pushoverSent,
-        scoreBreakdown: asset.scoreBreakdown,
-      });
-      this.lastAlertAt.set(asset.symbol, now);
-    }
+      const [inserted] = await tx
+        .insert(alertsTable)
+        .values({
+          symbol: asset.symbol,
+          alertLevel: asset.alertLevel,
+          setupScore: asset.setupScore,
+          triggerReason,
+          markPrice: asset.markPrice,
+          dayChangePct: asset.dayChangePct,
+          rvol: asset.dailyRvol,
+          pushoverSent: false,
+          scoreBreakdown: asset.scoreBreakdown,
+        })
+        .returning({ id: alertsTable.id });
+
+      return inserted?.id ?? null;
+    });
   }
 
   private buildTriggerReason(asset: AssetState): string {
@@ -608,6 +673,3 @@ class ScannerEngine {
 }
 
 export const scanner = new ScannerEngine();
-
-// Suppress unused import warning for `gte` (kept for future use)
-void gte;
