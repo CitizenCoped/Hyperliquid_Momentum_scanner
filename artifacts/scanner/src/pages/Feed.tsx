@@ -5,6 +5,7 @@ import { PulseNumber } from "@/components/ui/pulse-number";
 import { formatPercent, formatNumber } from "@/lib/format";
 import { BellRing, Check, BellOff } from "lucide-react";
 import { useLocation } from "wouter";
+import { isUnauthorizedError, promptForAdminToken } from "@/lib/admin-token";
 
 export default function Feed() {
   const [, setLocation] = useLocation();
@@ -15,11 +16,20 @@ export default function Feed() {
   
   const dismissAlert = useDismissAlert();
 
+  const dismissWithAdminTokenRetry = (id: number) => {
+    dismissAlert.mutate({ id }, {
+      onSuccess: () => refetch(),
+      onError: (err) => {
+        if (isUnauthorizedError(err) && promptForAdminToken()) {
+          dismissWithAdminTokenRetry(id);
+        }
+      },
+    });
+  };
+
   const handleDismiss = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
-    dismissAlert.mutate({ id }, {
-      onSuccess: () => refetch()
-    });
+    dismissWithAdminTokenRetry(id);
   };
 
   return (

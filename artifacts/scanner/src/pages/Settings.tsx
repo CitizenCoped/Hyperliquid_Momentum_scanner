@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
+import { isUnauthorizedError, promptForAdminToken } from "@/lib/admin-token";
 import { Save, Bell, Loader2 } from "lucide-react";
 
 const settingsSchema = z.object({
@@ -63,6 +64,11 @@ export default function Settings() {
         });
       },
       onError: (err) => {
+        if (isUnauthorizedError(err) && promptForAdminToken()) {
+          onSubmit(data);
+          return;
+        }
+
         toast({
           title: "Error",
           description: "Failed to save settings.",
@@ -88,7 +94,12 @@ export default function Settings() {
           });
         }
       },
-      onError: () => {
+      onError: (err) => {
+        if (isUnauthorizedError(err) && promptForAdminToken()) {
+          handleTestNotification();
+          return;
+        }
+
         toast({
           title: "Error",
           description: "Failed to connect to Pushover API.",
