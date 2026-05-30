@@ -159,6 +159,8 @@ paths:
       operationId: dismissAlert
       tags: [alerts]
       summary: Dismiss an alert
+      security:
+        - AdminBearerAuth: []
       parameters:
         - name: id
           in: path
@@ -172,12 +174,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Alert"
+        "401":
+          description: Admin authorization required
+        "503":
+          description: Admin token is not configured
 
   /alerts/test-pushover:
     post:
       operationId: testPushover
       tags: [alerts]
       summary: Send a test Pushover notification
+      security:
+        - AdminBearerAuth: []
       responses:
         "200":
           description: Test notification sent
@@ -185,6 +193,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TestPushoverResponse"
+        "401":
+          description: Admin authorization required
+        "503":
+          description: Admin token is not configured
 
   /settings:
     get:
@@ -202,6 +214,8 @@ paths:
       operationId: updateSettings
       tags: [settings]
       summary: Update alert settings
+      security:
+        - AdminBearerAuth: []
       requestBody:
         required: true
         content:
@@ -215,8 +229,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Settings"
+        "401":
+          description: Admin authorization required
+        "503":
+          description: Admin token is not configured
 
 components:
+  securitySchemes:
+    AdminBearerAuth:
+      type: http
+      scheme: bearer
+      description: Admin token from SCANNER_ADMIN_TOKEN or SESSION_SECRET.
+
   schemas:
     HealthStatus:
       type: object
