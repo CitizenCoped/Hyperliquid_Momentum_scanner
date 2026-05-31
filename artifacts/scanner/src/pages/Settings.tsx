@@ -13,18 +13,18 @@ import { useToast } from "@/hooks/use-toast";
 import { Save, Bell, Loader2 } from "lucide-react";
 
 const settingsSchema = z.object({
-  watchThreshold: z.coerce.number().min(0).max(100),
-  activeSetupThreshold: z.coerce.number().min(0).max(100),
-  aPlusThreshold: z.coerce.number().min(0).max(100),
+  watchThreshold: z.coerce.number().int().min(0).max(100),
+  activeSetupThreshold: z.coerce.number().int().min(0).max(100),
+  aPlusThreshold: z.coerce.number().int().min(0).max(100),
   pushoverEnabled: z.boolean(),
   minAlertLevel: z.enum(["WATCH", "ACTIVE_SETUP", "A_PLUS_SETUP"]),
-  scanIntervalSeconds: z.coerce.number().min(5).max(300),
+  scanIntervalSeconds: z.coerce.number().int().min(5).max(300),
 });
 
 type SettingsFormValues = z.infer<typeof settingsSchema>;
 
 export default function Settings() {
-  const { data: settings, isLoading } = useGetSettings();
+  const { data: settings, isError, isLoading, refetch } = useGetSettings();
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
@@ -32,12 +32,12 @@ export default function Settings() {
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
     defaultValues: {
-      watchThreshold: 50,
-      activeSetupThreshold: 65,
-      aPlusThreshold: 80,
-      pushoverEnabled: false,
+      watchThreshold: 60,
+      activeSetupThreshold: 75,
+      aPlusThreshold: 85,
+      pushoverEnabled: true,
       minAlertLevel: "ACTIVE_SETUP",
-      scanIntervalSeconds: 10,
+      scanIntervalSeconds: 15,
     }
   });
 
@@ -48,7 +48,7 @@ export default function Settings() {
         activeSetupThreshold: settings.activeSetupThreshold,
         aPlusThreshold: settings.aPlusThreshold,
         pushoverEnabled: settings.pushoverEnabled,
-        minAlertLevel: settings.minAlertLevel as any,
+        minAlertLevel: settings.minAlertLevel,
         scanIntervalSeconds: settings.scanIntervalSeconds,
       });
     }
@@ -100,6 +100,24 @@ export default function Settings() {
 
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground font-mono">LOADING SETTINGS...</div>;
+  }
+
+  if (isError || !settings) {
+    return (
+      <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
+        <div className="max-w-2xl mx-auto w-full border border-destructive/50 rounded-lg bg-card p-6">
+          <h1 className="text-xl font-black uppercase tracking-tight text-destructive mb-3">
+            Settings Unavailable
+          </h1>
+          <p className="text-sm text-muted-foreground mb-6">
+            The current scanner settings could not be loaded, so saving is disabled to avoid overwriting the active configuration.
+          </p>
+          <Button type="button" variant="outline" onClick={() => void refetch()} className="font-mono text-xs">
+            Retry Loading Settings
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -167,7 +185,7 @@ export default function Settings() {
                   variant="outline" 
                   size="sm" 
                   onClick={handleTestNotification}
-                  disabled={testPushover.isPending || !form.watch("pushoverEnabled")}
+                  disabled={testPushover.isPending || !settings || !form.watch("pushoverEnabled")}
                   className="font-mono text-xs"
                 >
                   {testPushover.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Bell className="h-4 w-4 mr-2" />}
@@ -251,7 +269,7 @@ export default function Settings() {
               <Button 
                 type="submit" 
                 size="lg" 
-                disabled={updateSettings.isPending}
+                disabled={updateSettings.isPending || !settings}
                 className="font-bold tracking-widest uppercase px-8"
               >
                 {updateSettings.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}

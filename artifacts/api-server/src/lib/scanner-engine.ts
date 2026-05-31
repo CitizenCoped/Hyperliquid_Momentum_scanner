@@ -69,6 +69,7 @@ class ScannerEngine {
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
   private pollCount = 0;
+  private pollInFlight = false;
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -151,9 +152,21 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn("Skipping scanner poll because previous poll is still running");
+      return;
+    }
+
+    this.pollInFlight = true;
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
+      if (snapshots.length === 0) {
+        this.lastError = "Hyperliquid returned no active perp snapshots";
+        logger.warn("Scanner poll returned no snapshots; preserving previous state");
+        return;
+      }
+
       const polledAt = new Date();
 
       // Persist snapshots (chunk insert)
@@ -264,6 +277,8 @@ class ScannerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err }, "Scanner poll failed");
+    } finally {
+      this.pollInFlight = false;
     }
   }
 
@@ -492,6 +507,23 @@ class ScannerEngine {
       const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       const triggerReason = this.buildTriggerReason(asset);
       let pushoverSent = false;
+
+      const [insertedAlert] = await db
+        .insert(alertsTable)
+        .values({
+          symbol: asset.symbol,
+          alertLevel: asset.alertLevel,
+          setupScore: asset.setupScore,
+          triggerReason,
+          markPrice: asset.markPrice,
+          dayChangePct: asset.dayChangePct,
+          rvol: asset.dailyRvol,
+          pushoverSent: false,
+          scoreBreakdown: asset.scoreBreakdown,
+        })
+        .returning({ id: alertsTable.id });
+      this.lastAlertAt.set(asset.symbol, now);
+
       if (settings.pushoverEnabled && rank >= minRank) {
         const result = await sendPushover({
           title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
@@ -501,18 +533,12 @@ class ScannerEngine {
         pushoverSent = result.success;
       }
 
-      await db.insert(alertsTable).values({
-        symbol: asset.symbol,
-        alertLevel: asset.alertLevel,
-        setupScore: asset.setupScore,
-        triggerReason,
-        markPrice: asset.markPrice,
-        dayChangePct: asset.dayChangePct,
-        rvol: asset.dailyRvol,
-        pushoverSent,
-        scoreBreakdown: asset.scoreBreakdown,
-      });
-      this.lastAlertAt.set(asset.symbol, now);
+      if (pushoverSent && insertedAlert) {
+        await db
+          .update(alertsTable)
+          .set({ pushoverSent: true })
+          .where(eq(alertsTable.id, insertedAlert.id));
+      }
     }
   }
 
