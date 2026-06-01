@@ -24,7 +24,7 @@ const settingsSchema = z.object({
 type SettingsFormValues = z.infer<typeof settingsSchema>;
 
 export default function Settings() {
-  const { data: settings, isLoading } = useGetSettings();
+  const { data: settings, isLoading, isError, refetch } = useGetSettings();
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
@@ -32,12 +32,12 @@ export default function Settings() {
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
     defaultValues: {
-      watchThreshold: 50,
-      activeSetupThreshold: 65,
-      aPlusThreshold: 80,
-      pushoverEnabled: false,
+      watchThreshold: 60,
+      activeSetupThreshold: 75,
+      aPlusThreshold: 85,
+      pushoverEnabled: true,
       minAlertLevel: "ACTIVE_SETUP",
-      scanIntervalSeconds: 10,
+      scanIntervalSeconds: 15,
     }
   });
 
@@ -48,13 +48,22 @@ export default function Settings() {
         activeSetupThreshold: settings.activeSetupThreshold,
         aPlusThreshold: settings.aPlusThreshold,
         pushoverEnabled: settings.pushoverEnabled,
-        minAlertLevel: settings.minAlertLevel as any,
+        minAlertLevel: settings.minAlertLevel as SettingsFormValues["minAlertLevel"],
         scanIntervalSeconds: settings.scanIntervalSeconds,
       });
     }
   }, [settings, form]);
 
   const onSubmit = (data: SettingsFormValues) => {
+    if (!settings) {
+      toast({
+        title: "Settings Unavailable",
+        description: "Reload settings before saving changes.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     updateSettings.mutate({ data }, {
       onSuccess: () => {
         toast({
@@ -100,6 +109,22 @@ export default function Settings() {
 
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground font-mono">LOADING SETTINGS...</div>;
+  }
+
+  if (isError || !settings) {
+    return (
+      <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
+        <div className="max-w-2xl mx-auto w-full bg-card border border-border rounded-lg p-6 space-y-4">
+          <h1 className="text-2xl font-black uppercase tracking-tight text-foreground">Scanner Configuration</h1>
+          <p className="text-sm text-destructive font-mono">
+            SETTINGS UNAVAILABLE. Reload the current configuration before saving changes.
+          </p>
+          <Button type="button" variant="outline" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -203,7 +228,7 @@ export default function Settings() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Minimum Alert Level for Push</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger className="bg-background">
                             <SelectValue placeholder="Select a level" />

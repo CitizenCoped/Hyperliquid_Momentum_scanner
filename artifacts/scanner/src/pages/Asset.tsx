@@ -9,17 +9,18 @@ import { Link } from "wouter";
 export default function Asset() {
   const params = useParams<{ symbol: string }>();
   const symbol = params.symbol;
+  const normalizedSymbol = symbol?.toUpperCase();
 
-  const { data: asset, isLoading } = useGetAsset(symbol || "", { 
+  const { data: asset, isLoading } = useGetAsset(normalizedSymbol || "", { 
     query: { 
-      enabled: !!symbol, 
+      enabled: !!normalizedSymbol, 
       refetchInterval: 5000 
     } 
   });
 
   const { data: alerts = [] } = useListAlerts(
-    { symbol, limit: 20 },
-    { query: { enabled: !!symbol, refetchInterval: 10000 } }
+    { symbol: normalizedSymbol, limit: 20 },
+    { query: { enabled: !!normalizedSymbol, refetchInterval: 10000 } }
   );
 
   if (isLoading && !asset) {
