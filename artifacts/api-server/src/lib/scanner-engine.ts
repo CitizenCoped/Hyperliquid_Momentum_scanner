@@ -19,6 +19,7 @@ import {
   type AlertLevel,
   type ScoreBreakdown,
 } from "./scoring";
+import { PollGate } from "./poll-gate";
 
 export interface AssetState {
   symbol: string;
@@ -65,6 +66,7 @@ class ScannerEngine {
   private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private pollGate = new PollGate();
   private currentIntervalSec = 15;
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
@@ -80,7 +82,7 @@ class ScannerEngine {
       { intervalSec: this.currentIntervalSec },
       "Scanner engine starting",
     );
-    void this.runOnce();
+    void this.runOnceIfIdle();
     this.scheduleNext();
   }
 
@@ -94,8 +96,15 @@ class ScannerEngine {
     if (!this.running) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
-      void this.runOnce().finally(() => this.scheduleNext());
+      void this.runOnceIfIdle().finally(() => this.scheduleNext());
     }, this.currentIntervalSec * 1000);
+  }
+
+  private async runOnceIfIdle(): Promise<void> {
+    const started = await this.pollGate.run(() => this.runOnce());
+    if (!started) {
+      logger.warn("Skipping scanner poll because previous poll is still running");
+    }
   }
 
   private async ensureDefaultSettings(): Promise<void> {
