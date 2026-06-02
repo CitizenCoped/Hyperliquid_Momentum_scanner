@@ -67,6 +67,10 @@ test("ScannerEngine skips a scheduled poll while startup poll is active", async 
     releaseFirst();
     await startupPoll;
 
+    engine.runOnce = async () => {
+      started += 1;
+    };
+
     await engine.runOnceIfIdle();
     assert.equal(started, 2);
   } finally {
