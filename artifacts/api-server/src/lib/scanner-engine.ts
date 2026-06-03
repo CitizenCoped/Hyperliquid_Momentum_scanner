@@ -19,6 +19,7 @@ import {
   type AlertLevel,
   type ScoreBreakdown,
 } from "./scoring";
+import { isScannerStale } from "./health-status";
 
 export interface AssetState {
   symbol: string;
@@ -142,11 +143,16 @@ class ScannerEngine {
   }
 
   getStatus() {
-    return {
+    const status = {
       lastUpdated: this.lastUpdated,
       lastError: this.lastError,
       pollCount: this.pollCount,
       assetCount: this.state.size,
+      scanIntervalSeconds: this.currentIntervalSec,
+    };
+    return {
+      ...status,
+      stale: isScannerStale(status),
     };
   }
 
