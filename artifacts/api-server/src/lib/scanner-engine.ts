@@ -73,6 +73,11 @@ interface BookCacheEntry {
   fetchedAt: number;
 }
 
+type AlertReservation =
+  | { status: "locked_elsewhere" }
+  | { status: "cooldown"; lastAlertAt: number }
+  | { status: "reserved"; alertId: number };
+
 class ScannerEngine {
   private state = new Map<string, AssetState>();
   private bookCache = new Map<string, BookCacheEntry>();
@@ -515,7 +520,7 @@ class ScannerEngine {
         continue;
       }
 
-      const reserved = await db.transaction(async (tx) => {
+      const reserved = await db.transaction(async (tx): Promise<AlertReservation> => {
         // Serialize alert reservation per symbol across overlapping workers.
         const lockRows = await tx.execute<{ locked: boolean }>(sql`
           SELECT pg_try_advisory_xact_lock(
@@ -527,7 +532,7 @@ class ScannerEngine {
           locked: boolean | string;
         }>;
         if (!pgBoolean(lockRow?.locked)) {
-          return { reserved: false, locked: false } as const;
+          return { status: "locked_elsewhere" };
         }
 
         const recentRows = await tx.execute<{ created_at: Date }>(sql`
@@ -547,10 +552,9 @@ class ScannerEngine {
               ? recentRow.created_at
               : new Date(recentRow.created_at);
           return {
-            reserved: false,
-            locked: true,
+            status: "cooldown",
             lastAlertAt: lastAlert.getTime(),
-          } as const;
+          };
         }
 
         const [alert] = await tx
@@ -570,10 +574,10 @@ class ScannerEngine {
         if (!alert) {
           throw new Error(`Failed to reserve alert for ${asset.symbol}`);
         }
-        return { reserved: true, alertId: alert.id } as const;
+        return { status: "reserved", alertId: alert.id };
       });
 
-      if (!reserved.locked) {
+      if (reserved.status === "locked_elsewhere") {
         logger.debug(
           { symbol: asset.symbol },
           "Alert skipped because another scanner owns the cooldown lock",
@@ -581,10 +585,8 @@ class ScannerEngine {
         continue;
       }
 
-      if (!reserved.reserved) {
-        if ("lastAlertAt" in reserved && reserved.lastAlertAt) {
-          this.lastAlertAt.set(asset.symbol, reserved.lastAlertAt);
-        }
+      if (reserved.status === "cooldown") {
+        this.lastAlertAt.set(asset.symbol, reserved.lastAlertAt);
         continue;
       }
 
