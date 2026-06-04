@@ -525,7 +525,7 @@ class ScannerEngine {
         `);
         const [lockRow] = lockRows.rows as unknown as Array<{
           locked: boolean | string;
-        });
+        }>;
         if (!pgBoolean(lockRow?.locked)) {
           return { reserved: false, locked: false } as const;
         }
