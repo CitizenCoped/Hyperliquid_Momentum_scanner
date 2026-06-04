@@ -52,6 +52,20 @@ const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const BOOK_REFRESH_INTERVAL_MS = 60 * 1000;
 const SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const TOP_N_FOR_BOOK_DETAILS = 25;
+const ALERT_LOCK_NAMESPACE_KEY = 1_648_139_761;
+
+function advisoryLockKey(input: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash | 0;
+}
+
+function pgBoolean(value: unknown): boolean {
+  return value === true || value === "t" || value === "true";
+}
 
 interface BookCacheEntry {
   spreadBps: number;
@@ -59,12 +73,18 @@ interface BookCacheEntry {
   fetchedAt: number;
 }
 
+type AlertReservation =
+  | { status: "locked_elsewhere" }
+  | { status: "cooldown"; lastAlertAt: number }
+  | { status: "reserved"; alertId: number };
+
 class ScannerEngine {
   private state = new Map<string, AssetState>();
   private bookCache = new Map<string, BookCacheEntry>();
   private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private pollInFlight = false;
   private currentIntervalSec = 15;
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
@@ -151,6 +171,13 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn(
+        "Scanner poll skipped because a previous poll is still running",
+      );
+      return;
+    }
+    this.pollInFlight = true;
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
@@ -264,6 +291,8 @@ class ScannerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err }, "Scanner poll failed");
+    } finally {
+      this.pollInFlight = false;
     }
   }
 
@@ -482,6 +511,8 @@ class ScannerEngine {
     }
 
     for (const asset of candidates) {
+      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
+      const triggerReason = this.buildTriggerReason(asset);
       const lastDb = recentBySymbol.get(asset.symbol);
       if (lastDb && now - lastDb.getTime() < ALERT_COOLDOWN_MS) {
         // Backfill in-memory cache so future cycles short-circuit.
@@ -489,30 +520,91 @@ class ScannerEngine {
         continue;
       }
 
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
-      const triggerReason = this.buildTriggerReason(asset);
-      let pushoverSent = false;
+      const reserved = await db.transaction(async (tx): Promise<AlertReservation> => {
+        // Serialize alert reservation per symbol across overlapping workers.
+        const lockRows = await tx.execute<{ locked: boolean }>(sql`
+          SELECT pg_try_advisory_xact_lock(
+            ${ALERT_LOCK_NAMESPACE_KEY},
+            ${advisoryLockKey(asset.symbol)}
+          ) AS locked
+        `);
+        const [lockRow] = lockRows.rows as unknown as Array<{
+          locked: boolean | string;
+        }>;
+        if (!pgBoolean(lockRow?.locked)) {
+          return { status: "locked_elsewhere" };
+        }
+
+        const recentRows = await tx.execute<{ created_at: Date }>(sql`
+          SELECT created_at
+          FROM alerts
+          WHERE symbol = ${asset.symbol}
+            AND created_at >= ${cutoff}
+          ORDER BY created_at DESC
+          LIMIT 1
+        `);
+        const [recentRow] = recentRows.rows as unknown as Array<{
+          created_at: Date | string;
+        }>;
+        if (recentRow) {
+          const lastAlert =
+            recentRow.created_at instanceof Date
+              ? recentRow.created_at
+              : new Date(recentRow.created_at);
+          return {
+            status: "cooldown",
+            lastAlertAt: lastAlert.getTime(),
+          };
+        }
+
+        const [alert] = await tx
+          .insert(alertsTable)
+          .values({
+            symbol: asset.symbol,
+            alertLevel: asset.alertLevel,
+            setupScore: asset.setupScore,
+            triggerReason,
+            markPrice: asset.markPrice,
+            dayChangePct: asset.dayChangePct,
+            rvol: asset.dailyRvol,
+            pushoverSent: false,
+            scoreBreakdown: asset.scoreBreakdown,
+          })
+          .returning({ id: alertsTable.id });
+        if (!alert) {
+          throw new Error(`Failed to reserve alert for ${asset.symbol}`);
+        }
+        return { status: "reserved", alertId: alert.id };
+      });
+
+      if (reserved.status === "locked_elsewhere") {
+        logger.debug(
+          { symbol: asset.symbol },
+          "Alert skipped because another scanner owns the cooldown lock",
+        );
+        continue;
+      }
+
+      if (reserved.status === "cooldown") {
+        this.lastAlertAt.set(asset.symbol, reserved.lastAlertAt);
+        continue;
+      }
+
+      this.lastAlertAt.set(asset.symbol, now);
+
       if (settings.pushoverEnabled && rank >= minRank) {
         const result = await sendPushover({
           title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
           message: triggerReason,
           priority: asset.alertLevel === "A_PLUS_SETUP" ? 1 : 0,
         });
-        pushoverSent = result.success;
+        if (result.success) {
+          await db
+            .update(alertsTable)
+            .set({ pushoverSent: true })
+            .where(eq(alertsTable.id, reserved.alertId));
+        }
       }
-
-      await db.insert(alertsTable).values({
-        symbol: asset.symbol,
-        alertLevel: asset.alertLevel,
-        setupScore: asset.setupScore,
-        triggerReason,
-        markPrice: asset.markPrice,
-        dayChangePct: asset.dayChangePct,
-        rvol: asset.dailyRvol,
-        pushoverSent,
-        scoreBreakdown: asset.scoreBreakdown,
-      });
-      this.lastAlertAt.set(asset.symbol, now);
     }
   }
 
