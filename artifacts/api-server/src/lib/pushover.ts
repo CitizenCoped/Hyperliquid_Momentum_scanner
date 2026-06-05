@@ -1,6 +1,7 @@
 import { logger } from "./logger";
 
 const PUSHOVER_URL = "https://api.pushover.net/1/messages.json";
+const DEFAULT_TIMEOUT_MS = 5000;
 
 export interface PushoverMessage {
   title: string;
@@ -10,7 +11,13 @@ export interface PushoverMessage {
   url_title?: string;
 }
 
-export async function sendPushover(msg: PushoverMessage): Promise<{
+export async function sendPushover(
+  msg: PushoverMessage,
+  opts: {
+    timeoutMs?: number;
+    fetchImpl?: typeof fetch;
+  } = {},
+): Promise<{
   success: boolean;
   message: string;
 }> {
@@ -33,21 +40,29 @@ export async function sendPushover(msg: PushoverMessage): Promise<{
     if (msg.url) body.set("url", msg.url);
     if (msg.url_title) body.set("url_title", msg.url_title);
 
-    const res = await fetch(PUSHOVER_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body.toString(),
-    });
-    const data = (await res.json().catch(() => ({}))) as {
-      status?: number;
-      errors?: string[];
-    };
-    if (res.ok && data.status === 1) {
-      return { success: true, message: "Notification sent" };
+    const controller = new AbortController();
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await (opts.fetchImpl ?? fetch)(PUSHOVER_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+        signal: controller.signal,
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        status?: number;
+        errors?: string[];
+      };
+      if (res.ok && data.status === 1) {
+        return { success: true, message: "Notification sent" };
+      }
+      const errMsg = data.errors?.join(", ") ?? `HTTP ${res.status}`;
+      logger.warn({ data, status: res.status }, "Pushover send failed");
+      return { success: false, message: errMsg };
+    } finally {
+      clearTimeout(timer);
     }
-    const errMsg = data.errors?.join(", ") ?? `HTTP ${res.status}`;
-    logger.warn({ data, status: res.status }, "Pushover send failed");
-    return { success: false, message: errMsg };
   } catch (err) {
     logger.error({ err }, "Pushover request error");
     return {
