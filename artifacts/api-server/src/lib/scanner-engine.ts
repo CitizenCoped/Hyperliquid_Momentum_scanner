@@ -503,6 +503,7 @@ class ScannerEngine {
     for (const asset of candidates) {
       const lastDb = recentBySymbol.get(asset.symbol);
       if (
+        lastDb &&
         shouldSuppressForCooldown(
           asset.alertLevel,
           lastDb,
