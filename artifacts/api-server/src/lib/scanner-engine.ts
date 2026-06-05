@@ -19,6 +19,12 @@ import {
   type AlertLevel,
   type ScoreBreakdown,
 } from "./scoring";
+import {
+  ALERT_LEVEL_RANK,
+  preferCooldownEntry,
+  shouldSuppressForCooldown,
+  type AlertCooldownEntry,
+} from "./alert-cooldown";
 
 export interface AssetState {
   symbol: string;
@@ -41,13 +47,6 @@ export interface AssetState {
   updatedAt: string;
 }
 
-const ALERT_LEVEL_RANK: Record<string, number> = {
-  IGNORE: 0,
-  WATCH: 1,
-  ACTIVE_SETUP: 2,
-  A_PLUS_SETUP: 3,
-};
-
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const BOOK_REFRESH_INTERVAL_MS = 60 * 1000;
 const SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -62,7 +61,7 @@ interface BookCacheEntry {
 class ScannerEngine {
   private state = new Map<string, AssetState>();
   private bookCache = new Map<string, BookCacheEntry>();
-  private lastAlertAt = new Map<string, number>();
+  private lastAlertAt = new Map<string, AlertCooldownEntry>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private currentIntervalSec = 15;
@@ -456,36 +455,63 @@ class ScannerEngine {
       const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       if (rank < ALERT_LEVEL_RANK.WATCH) continue;
       // Fast in-memory short-circuit; durable DB check happens below.
-      const lastInMem = this.lastAlertAt.get(asset.symbol) ?? 0;
-      if (now - lastInMem < ALERT_COOLDOWN_MS) continue;
+      const lastInMem = this.lastAlertAt.get(asset.symbol);
+      if (
+        shouldSuppressForCooldown(
+          asset.alertLevel,
+          lastInMem,
+          now,
+          ALERT_COOLDOWN_MS,
+        )
+      ) {
+        continue;
+      }
       candidates.push(asset);
     }
     if (candidates.length === 0) return;
 
-    // DB-backed cooldown: pull most recent alert per symbol within the window.
-    // Survives restarts, scales to multiple workers (one row per fire).
-    const recent = await db.execute<{ symbol: string; created_at: Date }>(sql`
-      SELECT DISTINCT ON (symbol) symbol, created_at
+    // DB-backed cooldown: suppress only same-or-higher levels within the
+    // window. A WATCH should not hide a later ACTIVE/A+ escalation.
+    const recent = await db.execute<{
+      symbol: string;
+      created_at: Date;
+      alert_level: string;
+    }>(sql`
+      SELECT symbol, created_at, alert_level
       FROM alerts
       WHERE created_at >= ${cutoff}
       ORDER BY symbol, created_at DESC
     `);
-    const recentBySymbol = new Map<string, Date>();
+    const recentBySymbol = new Map<string, AlertCooldownEntry>();
     for (const r of recent.rows as unknown as Array<{
       symbol: string;
       created_at: Date | string;
+      alert_level: string;
     }>) {
+      const createdAt =
+        r.created_at instanceof Date ? r.created_at : new Date(r.created_at);
+      const candidate = {
+        alertLevel: r.alert_level,
+        createdAtMs: createdAt.getTime(),
+      };
       recentBySymbol.set(
         r.symbol,
-        r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
+        preferCooldownEntry(recentBySymbol.get(r.symbol), candidate),
       );
     }
 
     for (const asset of candidates) {
       const lastDb = recentBySymbol.get(asset.symbol);
-      if (lastDb && now - lastDb.getTime() < ALERT_COOLDOWN_MS) {
+      if (
+        shouldSuppressForCooldown(
+          asset.alertLevel,
+          lastDb,
+          now,
+          ALERT_COOLDOWN_MS,
+        )
+      ) {
         // Backfill in-memory cache so future cycles short-circuit.
-        this.lastAlertAt.set(asset.symbol, lastDb.getTime());
+        this.lastAlertAt.set(asset.symbol, lastDb);
         continue;
       }
 
@@ -512,7 +538,10 @@ class ScannerEngine {
         pushoverSent,
         scoreBreakdown: asset.scoreBreakdown,
       });
-      this.lastAlertAt.set(asset.symbol, now);
+      this.lastAlertAt.set(asset.symbol, {
+        alertLevel: asset.alertLevel,
+        createdAtMs: now,
+      });
     }
   }
 
