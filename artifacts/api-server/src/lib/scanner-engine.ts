@@ -15,6 +15,12 @@ import {
 } from "./hyperliquid";
 import { sendPushover } from "./pushover";
 import {
+  ALERT_LEVEL_RANK,
+  alertRank,
+  currentAlertRanks,
+  selectTransitionAlertCandidates,
+} from "./alert-policy";
+import {
   totalSetupScore,
   type AlertLevel,
   type ScoreBreakdown,
@@ -41,13 +47,6 @@ export interface AssetState {
   updatedAt: string;
 }
 
-const ALERT_LEVEL_RANK: Record<string, number> = {
-  IGNORE: 0,
-  WATCH: 1,
-  ACTIVE_SETUP: 2,
-  A_PLUS_SETUP: 3,
-};
-
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const BOOK_REFRESH_INTERVAL_MS = 60 * 1000;
 const SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -63,8 +62,10 @@ class ScannerEngine {
   private state = new Map<string, AssetState>();
   private bookCache = new Map<string, BookCacheEntry>();
   private lastAlertAt = new Map<string, number>();
+  private lastObservedAlertRanks = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private pollInFlight = false;
   private currentIntervalSec = 15;
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
@@ -80,8 +81,7 @@ class ScannerEngine {
       { intervalSec: this.currentIntervalSec },
       "Scanner engine starting",
     );
-    void this.runOnce();
-    this.scheduleNext();
+    void this.runOnce().finally(() => this.scheduleNext());
   }
 
   stop(): void {
@@ -151,6 +151,11 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn("Scanner poll skipped because previous poll is still running");
+      return;
+    }
+    this.pollInFlight = true;
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
@@ -264,6 +269,8 @@ class ScannerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err }, "Scanner poll failed");
+    } finally {
+      this.pollInFlight = false;
     }
   }
 
@@ -446,21 +453,24 @@ class ScannerEngine {
 
   private async maybeFireAlerts(settings: Settings): Promise<void> {
     if (this.state.size === 0) return;
-    const minRank = ALERT_LEVEL_RANK[settings.minAlertLevel] ?? 2;
+    const minRank = alertRank(settings.minAlertLevel) || ALERT_LEVEL_RANK.ACTIVE_SETUP;
     const now = Date.now();
     const cutoff = new Date(now - ALERT_COOLDOWN_MS);
+    const assets = Array.from(this.state.values());
+    const observedRanks = currentAlertRanks(assets);
 
     // Build the candidate set first so we can do one DB lookup for all symbols.
-    const candidates: AssetState[] = [];
-    for (const asset of this.state.values()) {
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
-      if (rank < ALERT_LEVEL_RANK.WATCH) continue;
-      // Fast in-memory short-circuit; durable DB check happens below.
-      const lastInMem = this.lastAlertAt.get(asset.symbol) ?? 0;
-      if (now - lastInMem < ALERT_COOLDOWN_MS) continue;
-      candidates.push(asset);
+    const candidates = selectTransitionAlertCandidates({
+      assets,
+      previousRanks: this.lastObservedAlertRanks,
+      lastAlertAt: this.lastAlertAt,
+      now,
+      cooldownMs: ALERT_COOLDOWN_MS,
+    });
+    if (candidates.length === 0) {
+      this.lastObservedAlertRanks = observedRanks;
+      return;
     }
-    if (candidates.length === 0) return;
 
     // DB-backed cooldown: pull most recent alert per symbol within the window.
     // Survives restarts, scales to multiple workers (one row per fire).
@@ -514,6 +524,7 @@ class ScannerEngine {
       });
       this.lastAlertAt.set(asset.symbol, now);
     }
+    this.lastObservedAlertRanks = observedRanks;
   }
 
   private buildTriggerReason(asset: AssetState): string {
