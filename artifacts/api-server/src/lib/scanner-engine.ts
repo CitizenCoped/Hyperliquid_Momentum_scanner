@@ -16,6 +16,7 @@ import {
 import { sendPushover } from "./pushover";
 import {
   ALERT_LEVEL_RANK,
+  alertRank,
   currentAlertRanks,
   selectTransitionAlertCandidates,
 } from "./alert-policy";
@@ -452,7 +453,7 @@ class ScannerEngine {
 
   private async maybeFireAlerts(settings: Settings): Promise<void> {
     if (this.state.size === 0) return;
-    const minRank = ALERT_LEVEL_RANK[settings.minAlertLevel] ?? 2;
+    const minRank = alertRank(settings.minAlertLevel) || ALERT_LEVEL_RANK.ACTIVE_SETUP;
     const now = Date.now();
     const cutoff = new Date(now - ALERT_COOLDOWN_MS);
     const assets = Array.from(this.state.values());
