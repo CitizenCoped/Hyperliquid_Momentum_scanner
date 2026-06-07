@@ -1,4 +1,4 @@
-import { db } from "@workspace/db";
+import { db, pool } from "@workspace/db";
 import {
   alerts as alertsTable,
   metricSnapshots,
@@ -52,6 +52,15 @@ const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
 const BOOK_REFRESH_INTERVAL_MS = 60 * 1000;
 const SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const TOP_N_FOR_BOOK_DETAILS = 25;
+const ALERT_DISPATCH_LOCK_KEY = [0x484c, 0x414c4552] as const; // "HL", "ALER"
+
+interface AdvisoryLockClient {
+  query<T = unknown>(
+    queryText: string,
+    values?: unknown[],
+  ): Promise<{ rows: T[] }>;
+  release(): void;
+}
 
 interface BookCacheEntry {
   spreadBps: number;
@@ -69,6 +78,7 @@ class ScannerEngine {
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
   private pollCount = 0;
+  private pollInFlight = false;
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -151,6 +161,12 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn("Scanner poll skipped because the previous poll is still running");
+      return;
+    }
+
+    this.pollInFlight = true;
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
@@ -264,6 +280,8 @@ class ScannerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err }, "Scanner poll failed");
+    } finally {
+      this.pollInFlight = false;
     }
   }
 
@@ -462,57 +480,98 @@ class ScannerEngine {
     }
     if (candidates.length === 0) return;
 
-    // DB-backed cooldown: pull most recent alert per symbol within the window.
-    // Survives restarts, scales to multiple workers (one row per fire).
-    const recent = await db.execute<{ symbol: string; created_at: Date }>(sql`
-      SELECT DISTINCT ON (symbol) symbol, created_at
-      FROM alerts
-      WHERE created_at >= ${cutoff}
-      ORDER BY symbol, created_at DESC
-    `);
-    const recentBySymbol = new Map<string, Date>();
-    for (const r of recent.rows as unknown as Array<{
-      symbol: string;
-      created_at: Date | string;
-    }>) {
-      recentBySymbol.set(
-        r.symbol,
-        r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
-      );
-    }
+    const lease = await this.acquireAlertDispatchLease();
+    if (!lease) return;
 
-    for (const asset of candidates) {
-      const lastDb = recentBySymbol.get(asset.symbol);
-      if (lastDb && now - lastDb.getTime() < ALERT_COOLDOWN_MS) {
-        // Backfill in-memory cache so future cycles short-circuit.
-        this.lastAlertAt.set(asset.symbol, lastDb.getTime());
-        continue;
+    try {
+      // DB-backed cooldown: pull most recent alert per symbol within the window.
+      // Survives restarts, scales to multiple workers (one row per fire).
+      const recent = await db.execute<{ symbol: string; created_at: Date }>(sql`
+        SELECT DISTINCT ON (symbol) symbol, created_at
+        FROM alerts
+        WHERE created_at >= ${cutoff}
+        ORDER BY symbol, created_at DESC
+      `);
+      const recentBySymbol = new Map<string, Date>();
+      for (const r of recent.rows as unknown as Array<{
+        symbol: string;
+        created_at: Date | string;
+      }>) {
+        recentBySymbol.set(
+          r.symbol,
+          r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
+        );
       }
 
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
-      const triggerReason = this.buildTriggerReason(asset);
-      let pushoverSent = false;
-      if (settings.pushoverEnabled && rank >= minRank) {
-        const result = await sendPushover({
-          title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
-          message: triggerReason,
-          priority: asset.alertLevel === "A_PLUS_SETUP" ? 1 : 0,
+      for (const asset of candidates) {
+        const lastDb = recentBySymbol.get(asset.symbol);
+        if (lastDb && now - lastDb.getTime() < ALERT_COOLDOWN_MS) {
+          // Backfill in-memory cache so future cycles short-circuit.
+          this.lastAlertAt.set(asset.symbol, lastDb.getTime());
+          continue;
+        }
+
+        const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
+        const triggerReason = this.buildTriggerReason(asset);
+        let pushoverSent = false;
+        if (settings.pushoverEnabled && rank >= minRank) {
+          const result = await sendPushover({
+            title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
+            message: triggerReason,
+            priority: asset.alertLevel === "A_PLUS_SETUP" ? 1 : 0,
+          });
+          pushoverSent = result.success;
+        }
+
+        await db.insert(alertsTable).values({
+          symbol: asset.symbol,
+          alertLevel: asset.alertLevel,
+          setupScore: asset.setupScore,
+          triggerReason,
+          markPrice: asset.markPrice,
+          dayChangePct: asset.dayChangePct,
+          rvol: asset.dailyRvol,
+          pushoverSent,
+          scoreBreakdown: asset.scoreBreakdown,
         });
-        pushoverSent = result.success;
+        this.lastAlertAt.set(asset.symbol, now);
       }
+    } finally {
+      await this.releaseAlertDispatchLease(lease);
+    }
+  }
 
-      await db.insert(alertsTable).values({
-        symbol: asset.symbol,
-        alertLevel: asset.alertLevel,
-        setupScore: asset.setupScore,
-        triggerReason,
-        markPrice: asset.markPrice,
-        dayChangePct: asset.dayChangePct,
-        rvol: asset.dailyRvol,
-        pushoverSent,
-        scoreBreakdown: asset.scoreBreakdown,
-      });
-      this.lastAlertAt.set(asset.symbol, now);
+  private async acquireAlertDispatchLease(): Promise<AdvisoryLockClient | null> {
+    const client = (await pool.connect()) as AdvisoryLockClient;
+    try {
+      const result = await client.query<{ acquired: boolean }>(
+        "SELECT pg_try_advisory_lock($1::integer, $2::integer) AS acquired",
+        [...ALERT_DISPATCH_LOCK_KEY],
+      );
+      if (result.rows[0]?.acquired === true) {
+        return client;
+      }
+      logger.debug("Alert dispatch skipped because another worker holds the lease");
+      client.release();
+      return null;
+    } catch (err) {
+      client.release();
+      throw err;
+    }
+  }
+
+  private async releaseAlertDispatchLease(
+    client: AdvisoryLockClient,
+  ): Promise<void> {
+    try {
+      await client.query(
+        "SELECT pg_advisory_unlock($1::integer, $2::integer)",
+        [...ALERT_DISPATCH_LOCK_KEY],
+      );
+    } catch (err) {
+      logger.warn({ err }, "Failed to release alert dispatch lease");
+    } finally {
+      client.release();
     }
   }
 
