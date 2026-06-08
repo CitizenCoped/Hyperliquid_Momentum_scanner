@@ -6,12 +6,14 @@ export function findAssetBySymbol<T extends SymbolicAsset>(
   assets: Iterable<T>,
   requestedSymbol: string,
 ): T | null {
-  for (const asset of assets) {
+  const assetList = Array.from(assets);
+
+  for (const asset of assetList) {
     if (asset.symbol === requestedSymbol) return asset;
   }
 
   const normalizedRequestedSymbol = requestedSymbol.toLowerCase();
-  for (const asset of assets) {
+  for (const asset of assetList) {
     if (asset.symbol.toLowerCase() === normalizedRequestedSymbol) {
       return asset;
     }
