@@ -19,6 +19,7 @@ import {
   type AlertLevel,
   type ScoreBreakdown,
 } from "./scoring";
+import { findAssetBySymbol } from "./symbol-lookup";
 
 export interface AssetState {
   symbol: string;
@@ -138,7 +139,7 @@ class ScannerEngine {
   }
 
   getAsset(symbol: string): AssetState | null {
-    return this.state.get(symbol) ?? null;
+    return this.state.get(symbol) ?? findAssetBySymbol(this.state.values(), symbol);
   }
 
   getStatus() {
