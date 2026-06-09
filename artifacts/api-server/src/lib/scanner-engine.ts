@@ -59,11 +59,12 @@ interface BookCacheEntry {
   fetchedAt: number;
 }
 
-class ScannerEngine {
+export class ScannerEngine {
   private state = new Map<string, AssetState>();
   private bookCache = new Map<string, BookCacheEntry>();
   private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
+  private pollInFlight: Promise<void> | null = null;
   private running = false;
   private currentIntervalSec = 15;
   private lastUpdated: Date | null = null;
@@ -80,7 +81,7 @@ class ScannerEngine {
       { intervalSec: this.currentIntervalSec },
       "Scanner engine starting",
     );
-    void this.runOnce();
+    void this.runOnceExclusive();
     this.scheduleNext();
   }
 
@@ -94,8 +95,20 @@ class ScannerEngine {
     if (!this.running) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
-      void this.runOnce().finally(() => this.scheduleNext());
+      void this.runOnceExclusive().finally(() => this.scheduleNext());
     }, this.currentIntervalSec * 1000);
+  }
+
+  private runOnceExclusive(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn("Scanner poll already in flight; waiting before rescheduling");
+      return this.pollInFlight;
+    }
+
+    this.pollInFlight = this.runOnce().finally(() => {
+      this.pollInFlight = null;
+    });
+    return this.pollInFlight;
   }
 
   private async ensureDefaultSettings(): Promise<void> {
