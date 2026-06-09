@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 process.env["DATABASE_URL"] ??= "postgres://scanner:scanner@127.0.0.1:1/scanner";
+process.env["NODE_ENV"] = "production";
 
 type TestableScannerEngine = {
   runOnce: () => Promise<void>;
