@@ -7,7 +7,7 @@ import { build } from "esbuild";
 
 const packageDir = path.dirname(fileURLToPath(import.meta.url));
 const tempDir = await mkdtemp(path.join(tmpdir(), "api-server-tests-"));
-const outfile = path.join(tempDir, "scanner-engine.concurrency.test.mjs");
+const outfile = path.join(tempDir, "scanner-engine.concurrency.test.cjs");
 
 try {
   await build({
@@ -16,7 +16,7 @@ try {
     ],
     bundle: true,
     platform: "node",
-    format: "esm",
+    format: "cjs",
     outfile,
     logLevel: "silent",
     external: ["pg-native"],
