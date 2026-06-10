@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -23,22 +23,24 @@ const settingsSchema = z.object({
 
 type SettingsFormValues = z.infer<typeof settingsSchema>;
 
+const DEFAULT_SETTINGS_FORM_VALUES: SettingsFormValues = {
+  watchThreshold: 60,
+  activeSetupThreshold: 75,
+  aPlusThreshold: 85,
+  pushoverEnabled: true,
+  minAlertLevel: "ACTIVE_SETUP",
+  scanIntervalSeconds: 15,
+};
+
 export default function Settings() {
-  const { data: settings, isLoading } = useGetSettings();
+  const { data: settings, isLoading, isError } = useGetSettings();
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
-    defaultValues: {
-      watchThreshold: 50,
-      activeSetupThreshold: 65,
-      aPlusThreshold: 80,
-      pushoverEnabled: false,
-      minAlertLevel: "ACTIVE_SETUP",
-      scanIntervalSeconds: 10,
-    }
+    defaultValues: DEFAULT_SETTINGS_FORM_VALUES,
   });
 
   useEffect(() => {
@@ -48,7 +50,7 @@ export default function Settings() {
         activeSetupThreshold: settings.activeSetupThreshold,
         aPlusThreshold: settings.aPlusThreshold,
         pushoverEnabled: settings.pushoverEnabled,
-        minAlertLevel: settings.minAlertLevel as any,
+        minAlertLevel: settings.minAlertLevel as SettingsFormValues["minAlertLevel"],
         scanIntervalSeconds: settings.scanIntervalSeconds,
       });
     }
@@ -100,6 +102,14 @@ export default function Settings() {
 
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground font-mono">LOADING SETTINGS...</div>;
+  }
+
+  if (isError || !settings) {
+    return (
+      <div className="p-8 text-center text-destructive font-mono">
+        SETTINGS UNAVAILABLE. REFRESH AND TRY AGAIN BEFORE SAVING CONFIGURATION.
+      </div>
+    );
   }
 
   return (
@@ -203,7 +213,7 @@ export default function Settings() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Minimum Alert Level for Push</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger className="bg-background">
                             <SelectValue placeholder="Select a level" />

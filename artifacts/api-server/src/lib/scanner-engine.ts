@@ -53,6 +53,52 @@ const BOOK_REFRESH_INTERVAL_MS = 60 * 1000;
 const SNAPSHOT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const TOP_N_FOR_BOOK_DETAILS = 25;
 
+interface AlertCooldownRecord {
+  createdAt: Date;
+  rank: number;
+}
+
+export function alertLevelRank(alertLevel: string): number {
+  return ALERT_LEVEL_RANK[alertLevel] ?? 0;
+}
+
+export function planAlertCandidate(args: {
+  now: number;
+  alertLevel: AlertLevel;
+  minAlertLevel: string;
+  pushoverEnabled: boolean;
+  recentAny?: AlertCooldownRecord;
+  recentNotification?: AlertCooldownRecord;
+  cooldownMs?: number;
+}): { shouldInsert: boolean; shouldSendPushover: boolean } {
+  const cooldownMs = args.cooldownMs ?? ALERT_COOLDOWN_MS;
+  const rank = alertLevelRank(args.alertLevel);
+  if (rank < ALERT_LEVEL_RANK.WATCH) {
+    return { shouldInsert: false, shouldSendPushover: false };
+  }
+
+  const minRank = alertLevelRank(args.minAlertLevel) || ALERT_LEVEL_RANK.ACTIVE_SETUP;
+  const recentAnyIsFresh =
+    args.recentAny !== undefined &&
+    args.now - args.recentAny.createdAt.getTime() < cooldownMs;
+  const recentNotificationCoversCurrentLevel =
+    args.recentNotification !== undefined &&
+    args.now - args.recentNotification.createdAt.getTime() < cooldownMs &&
+    args.recentNotification.rank >= rank;
+  const isEscalation =
+    recentAnyIsFresh && args.recentAny !== undefined && rank > args.recentAny.rank;
+
+  const shouldSendPushover =
+    args.pushoverEnabled &&
+    rank >= minRank &&
+    !recentNotificationCoversCurrentLevel;
+
+  return {
+    shouldInsert: shouldSendPushover || !recentAnyIsFresh || isEscalation,
+    shouldSendPushover,
+  };
+}
+
 interface BookCacheEntry {
   spreadBps: number;
   depth1pctUsd: number;
@@ -62,7 +108,6 @@ interface BookCacheEntry {
 class ScannerEngine {
   private state = new Map<string, AssetState>();
   private bookCache = new Map<string, BookCacheEntry>();
-  private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private currentIntervalSec = 15;
@@ -446,53 +491,82 @@ class ScannerEngine {
 
   private async maybeFireAlerts(settings: Settings): Promise<void> {
     if (this.state.size === 0) return;
-    const minRank = ALERT_LEVEL_RANK[settings.minAlertLevel] ?? 2;
     const now = Date.now();
     const cutoff = new Date(now - ALERT_COOLDOWN_MS);
 
     // Build the candidate set first so we can do one DB lookup for all symbols.
     const candidates: AssetState[] = [];
     for (const asset of this.state.values()) {
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
+      const rank = alertLevelRank(asset.alertLevel);
       if (rank < ALERT_LEVEL_RANK.WATCH) continue;
-      // Fast in-memory short-circuit; durable DB check happens below.
-      const lastInMem = this.lastAlertAt.get(asset.symbol) ?? 0;
-      if (now - lastInMem < ALERT_COOLDOWN_MS) continue;
       candidates.push(asset);
     }
     if (candidates.length === 0) return;
 
-    // DB-backed cooldown: pull most recent alert per symbol within the window.
-    // Survives restarts, scales to multiple workers (one row per fire).
-    const recent = await db.execute<{ symbol: string; created_at: Date }>(sql`
-      SELECT DISTINCT ON (symbol) symbol, created_at
+    // DB-backed cooldown: feed rows suppress duplicate feed rows, while only
+    // successfully delivered pushes suppress later push notifications.
+    const recent = await db.execute<{
+      symbol: string;
+      created_at: Date;
+      alert_level: string;
+    }>(sql`
+      SELECT DISTINCT ON (symbol) symbol, created_at, alert_level
       FROM alerts
       WHERE created_at >= ${cutoff}
       ORDER BY symbol, created_at DESC
     `);
-    const recentBySymbol = new Map<string, Date>();
+    const recentBySymbol = new Map<string, AlertCooldownRecord>();
     for (const r of recent.rows as unknown as Array<{
       symbol: string;
       created_at: Date | string;
+      alert_level: string;
     }>) {
-      recentBySymbol.set(
-        r.symbol,
-        r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
-      );
+      recentBySymbol.set(r.symbol, {
+        createdAt:
+          r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
+        rank: alertLevelRank(r.alert_level),
+      });
+    }
+
+    const recentSent = await db.execute<{
+      symbol: string;
+      created_at: Date;
+      alert_level: string;
+    }>(sql`
+      SELECT DISTINCT ON (symbol) symbol, created_at, alert_level
+      FROM alerts
+      WHERE created_at >= ${cutoff} AND pushover_sent = true
+      ORDER BY symbol, created_at DESC
+    `);
+    const recentNotificationBySymbol = new Map<string, AlertCooldownRecord>();
+    for (const r of recentSent.rows as unknown as Array<{
+      symbol: string;
+      created_at: Date | string;
+      alert_level: string;
+    }>) {
+      recentNotificationBySymbol.set(r.symbol, {
+        createdAt:
+          r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
+        rank: alertLevelRank(r.alert_level),
+      });
     }
 
     for (const asset of candidates) {
-      const lastDb = recentBySymbol.get(asset.symbol);
-      if (lastDb && now - lastDb.getTime() < ALERT_COOLDOWN_MS) {
-        // Backfill in-memory cache so future cycles short-circuit.
-        this.lastAlertAt.set(asset.symbol, lastDb.getTime());
+      const plan = planAlertCandidate({
+        now,
+        alertLevel: asset.alertLevel,
+        minAlertLevel: settings.minAlertLevel,
+        pushoverEnabled: settings.pushoverEnabled,
+        recentAny: recentBySymbol.get(asset.symbol),
+        recentNotification: recentNotificationBySymbol.get(asset.symbol),
+      });
+      if (!plan.shouldInsert) {
         continue;
       }
 
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       const triggerReason = this.buildTriggerReason(asset);
       let pushoverSent = false;
-      if (settings.pushoverEnabled && rank >= minRank) {
+      if (plan.shouldSendPushover) {
         const result = await sendPushover({
           title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
           message: triggerReason,
@@ -512,7 +586,6 @@ class ScannerEngine {
         pushoverSent,
         scoreBreakdown: asset.scoreBreakdown,
       });
-      this.lastAlertAt.set(asset.symbol, now);
     }
   }
 
