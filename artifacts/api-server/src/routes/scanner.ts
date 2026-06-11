@@ -53,7 +53,7 @@ router.get("/scanner/assets", (req, res) => {
 });
 
 router.get("/scanner/assets/:symbol", (req, res) => {
-  const a = scanner.getAsset(req.params.symbol.toUpperCase());
+  const a = scanner.getAsset(req.params.symbol);
   if (!a) {
     res.status(404).json({ error: "asset not found" });
     return;
