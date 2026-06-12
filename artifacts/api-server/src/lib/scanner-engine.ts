@@ -491,28 +491,41 @@ class ScannerEngine {
 
       const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       const triggerReason = this.buildTriggerReason(asset);
-      let pushoverSent = false;
+      const [alert] = await db
+        .insert(alertsTable)
+        .values({
+          symbol: asset.symbol,
+          alertLevel: asset.alertLevel,
+          setupScore: asset.setupScore,
+          triggerReason,
+          markPrice: asset.markPrice,
+          dayChangePct: asset.dayChangePct,
+          rvol: asset.dailyRvol,
+          pushoverSent: false,
+          scoreBreakdown: asset.scoreBreakdown,
+        })
+        .returning({ id: alertsTable.id });
+      this.lastAlertAt.set(asset.symbol, now);
+
       if (settings.pushoverEnabled && rank >= minRank) {
         const result = await sendPushover({
           title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
           message: triggerReason,
           priority: asset.alertLevel === "A_PLUS_SETUP" ? 1 : 0,
         });
-        pushoverSent = result.success;
+        if (result.success && alert) {
+          await db
+            .update(alertsTable)
+            .set({ pushoverSent: true })
+            .where(eq(alertsTable.id, alert.id))
+            .catch((err) => {
+              logger.warn(
+                { err, alertId: alert.id },
+                "Failed to mark alert Pushover delivery",
+              );
+            });
+        }
       }
-
-      await db.insert(alertsTable).values({
-        symbol: asset.symbol,
-        alertLevel: asset.alertLevel,
-        setupScore: asset.setupScore,
-        triggerReason,
-        markPrice: asset.markPrice,
-        dayChangePct: asset.dayChangePct,
-        rvol: asset.dailyRvol,
-        pushoverSent,
-        scoreBreakdown: asset.scoreBreakdown,
-      });
-      this.lastAlertAt.set(asset.symbol, now);
     }
   }
 

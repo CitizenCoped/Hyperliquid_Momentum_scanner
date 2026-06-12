@@ -9,8 +9,9 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
-import { Save, Bell, Loader2 } from "lucide-react";
+import { Save, Bell, Loader2, AlertTriangle } from "lucide-react";
 
 const settingsSchema = z.object({
   watchThreshold: z.coerce.number().min(0).max(100),
@@ -23,22 +24,24 @@ const settingsSchema = z.object({
 
 type SettingsFormValues = z.infer<typeof settingsSchema>;
 
+const DEFAULT_SETTINGS: SettingsFormValues = {
+  watchThreshold: 60,
+  activeSetupThreshold: 75,
+  aPlusThreshold: 85,
+  pushoverEnabled: true,
+  minAlertLevel: "ACTIVE_SETUP",
+  scanIntervalSeconds: 15,
+};
+
 export default function Settings() {
-  const { data: settings, isLoading } = useGetSettings();
+  const { data: settings, isLoading, isError, error, refetch, isRefetching } = useGetSettings();
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
-    defaultValues: {
-      watchThreshold: 50,
-      activeSetupThreshold: 65,
-      aPlusThreshold: 80,
-      pushoverEnabled: false,
-      minAlertLevel: "ACTIVE_SETUP",
-      scanIntervalSeconds: 10,
-    }
+    defaultValues: DEFAULT_SETTINGS
   });
 
   useEffect(() => {
@@ -55,6 +58,15 @@ export default function Settings() {
   }, [settings, form]);
 
   const onSubmit = (data: SettingsFormValues) => {
+    if (!settings) {
+      toast({
+        title: "Settings Not Loaded",
+        description: "Reload settings before saving changes.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     updateSettings.mutate({ data }, {
       onSuccess: () => {
         toast({
@@ -73,6 +85,15 @@ export default function Settings() {
   };
 
   const handleTestNotification = () => {
+    if (!settings) {
+      toast({
+        title: "Settings Not Loaded",
+        description: "Reload settings before sending a test notification.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     testPushover.mutate(undefined, {
       onSuccess: (res) => {
         if (res.success) {
@@ -100,6 +121,35 @@ export default function Settings() {
 
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground font-mono">LOADING SETTINGS...</div>;
+  }
+
+  if (isError || !settings) {
+    const message = error instanceof Error ? error.message : "Unable to load scanner settings.";
+    return (
+      <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
+        <div className="max-w-2xl mx-auto w-full">
+          <h1 className="text-2xl font-black uppercase tracking-tight text-foreground mb-8 border-b border-border pb-4">Scanner Configuration</h1>
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Unable to load settings</AlertTitle>
+            <AlertDescription className="space-y-4">
+              <p>{message}</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void refetch()}
+                disabled={isRefetching}
+                className="font-mono text-xs"
+              >
+                {isRefetching ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -203,7 +253,7 @@ export default function Settings() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Minimum Alert Level for Push</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger className="bg-background">
                             <SelectValue placeholder="Select a level" />
