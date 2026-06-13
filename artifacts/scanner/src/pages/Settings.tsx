@@ -1,8 +1,8 @@
-import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/api-client-react";
+import { useGetSettings, useUpdateSettings, useTestPushover, type Settings } from "@workspace/api-client-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -12,22 +12,35 @@ import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, For
 import { useToast } from "@/hooks/use-toast";
 import { Save, Bell, Loader2 } from "lucide-react";
 
+const requiredNumber = (schema: z.ZodNumber) =>
+  z.preprocess((value) => (value === "" ? undefined : value), schema);
+
 const settingsSchema = z.object({
-  watchThreshold: z.coerce.number().min(0).max(100),
-  activeSetupThreshold: z.coerce.number().min(0).max(100),
-  aPlusThreshold: z.coerce.number().min(0).max(100),
+  watchThreshold: requiredNumber(z.coerce.number().int().min(0).max(100)),
+  activeSetupThreshold: requiredNumber(z.coerce.number().int().min(0).max(100)),
+  aPlusThreshold: requiredNumber(z.coerce.number().int().min(0).max(100)),
   pushoverEnabled: z.boolean(),
   minAlertLevel: z.enum(["WATCH", "ACTIVE_SETUP", "A_PLUS_SETUP"]),
-  scanIntervalSeconds: z.coerce.number().min(5).max(300),
+  scanIntervalSeconds: requiredNumber(z.coerce.number().int().min(5).max(300)),
 });
 
 type SettingsFormValues = z.infer<typeof settingsSchema>;
 
+const toFormValues = (settings: Settings): SettingsFormValues => ({
+  watchThreshold: settings.watchThreshold,
+  activeSetupThreshold: settings.activeSetupThreshold,
+  aPlusThreshold: settings.aPlusThreshold,
+  pushoverEnabled: settings.pushoverEnabled,
+  minAlertLevel: settings.minAlertLevel,
+  scanIntervalSeconds: settings.scanIntervalSeconds,
+});
+
 export default function Settings() {
-  const { data: settings, isLoading } = useGetSettings();
+  const { data: settings, isLoading, isError, refetch } = useGetSettings();
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [formInitialized, setFormInitialized] = useState(false);
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -40,23 +53,23 @@ export default function Settings() {
       scanIntervalSeconds: 10,
     }
   });
+  const { isDirty } = form.formState;
 
   useEffect(() => {
     if (settings) {
-      form.reset({
-        watchThreshold: settings.watchThreshold,
-        activeSetupThreshold: settings.activeSetupThreshold,
-        aPlusThreshold: settings.aPlusThreshold,
-        pushoverEnabled: settings.pushoverEnabled,
-        minAlertLevel: settings.minAlertLevel as any,
-        scanIntervalSeconds: settings.scanIntervalSeconds,
-      });
+      if (!formInitialized || !isDirty) {
+        form.reset(toFormValues(settings));
+      }
+      setFormInitialized(true);
     }
-  }, [settings, form]);
+  }, [settings, form, formInitialized, isDirty]);
 
   const onSubmit = (data: SettingsFormValues) => {
+    if (!formInitialized) return;
     updateSettings.mutate({ data }, {
-      onSuccess: () => {
+      onSuccess: (updatedSettings) => {
+        form.reset(toFormValues(updatedSettings));
+        setFormInitialized(true);
         toast({
           title: "Settings Saved",
           description: "Scanner settings have been updated.",
@@ -99,6 +112,21 @@ export default function Settings() {
   };
 
   if (isLoading) {
+    return <div className="p-8 text-center text-muted-foreground font-mono">LOADING SETTINGS...</div>;
+  }
+
+  if (!settings && isError) {
+    return (
+      <div className="p-8 text-center space-y-4">
+        <div className="text-destructive font-mono">FAILED TO LOAD SETTINGS.</div>
+        <Button type="button" variant="outline" onClick={() => void refetch()}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  if (!formInitialized) {
     return <div className="p-8 text-center text-muted-foreground font-mono">LOADING SETTINGS...</div>;
   }
 
@@ -203,7 +231,7 @@ export default function Settings() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Minimum Alert Level for Push</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger className="bg-background">
                             <SelectValue placeholder="Select a level" />
@@ -251,7 +279,7 @@ export default function Settings() {
               <Button 
                 type="submit" 
                 size="lg" 
-                disabled={updateSettings.isPending}
+                disabled={updateSettings.isPending || !formInitialized}
                 className="font-bold tracking-widest uppercase px-8"
               >
                 {updateSettings.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
