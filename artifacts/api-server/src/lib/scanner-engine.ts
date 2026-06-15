@@ -65,6 +65,8 @@ class ScannerEngine {
   private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private pollInProgress = false;
+  private bookRefreshInProgress = false;
   private currentIntervalSec = 15;
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
@@ -72,16 +74,15 @@ class ScannerEngine {
 
   async start(): Promise<void> {
     if (this.running) return;
-    this.running = true;
     await this.ensureDefaultSettings();
     const s = await this.getSettings();
     this.currentIntervalSec = s.scanIntervalSeconds;
+    this.running = true;
     logger.info(
       { intervalSec: this.currentIntervalSec },
       "Scanner engine starting",
     );
-    void this.runOnce();
-    this.scheduleNext();
+    void this.runOnce().finally(() => this.scheduleNext());
   }
 
   stop(): void {
@@ -94,6 +95,7 @@ class ScannerEngine {
     if (!this.running) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
+      this.timer = null;
       void this.runOnce().finally(() => this.scheduleNext());
     }, this.currentIntervalSec * 1000);
   }
@@ -151,6 +153,12 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInProgress) {
+      logger.warn("Skipping scanner poll because previous poll is still running");
+      return;
+    }
+
+    this.pollInProgress = true;
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
@@ -252,7 +260,7 @@ class ScannerEngine {
       this.pollCount += 1;
 
       // Refresh book stats for top N
-      void this.refreshTopBooks(snapshots);
+      this.refreshTopBooksInBackground(snapshots);
 
       // Trigger alerts
       await this.maybeFireAlerts(settings);
@@ -264,6 +272,8 @@ class ScannerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err }, "Scanner poll failed");
+    } finally {
+      this.pollInProgress = false;
     }
   }
 
@@ -442,6 +452,20 @@ class ScannerEngine {
       }
       await new Promise((r) => setTimeout(r, 50));
     }
+  }
+
+  private refreshTopBooksInBackground(
+    snapshots: HyperliquidAssetSnapshot[],
+  ): void {
+    if (this.bookRefreshInProgress) {
+      logger.debug("Skipping book refresh because previous refresh is still running");
+      return;
+    }
+
+    this.bookRefreshInProgress = true;
+    void this.refreshTopBooks(snapshots).finally(() => {
+      this.bookRefreshInProgress = false;
+    });
   }
 
   private async maybeFireAlerts(settings: Settings): Promise<void> {
