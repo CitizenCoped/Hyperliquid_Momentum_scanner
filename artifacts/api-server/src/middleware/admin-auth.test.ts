@@ -1,36 +1,43 @@
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import test from "node:test";
 import assert from "node:assert/strict";
-import app from "../app";
+import type { Request, Response } from "express";
+import { requireAdminAuth } from "./admin-auth";
 
-async function withServer<T>(
-  fn: (baseUrl: string) => Promise<T>,
-): Promise<T> {
-  const server: Server = createServer(app);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-
-  try {
-    const address = server.address() as AddressInfo;
-    return await fn(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((err) => (err ? reject(err) : resolve()));
-    });
-  }
+interface AuthResult {
+  statusCode: number | null;
+  body: unknown;
+  nextCalled: boolean;
 }
 
-async function requestProtectedSettings(token?: string): Promise<Response> {
-  return withServer((baseUrl) =>
-    fetch(`${baseUrl}/api/settings`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ watchThreshold: "not-a-number" }),
-    }),
-  );
+function runAuth(authorization?: string): AuthResult {
+  const result: AuthResult = {
+    statusCode: null,
+    body: undefined,
+    nextCalled: false,
+  };
+
+  const req = {
+    header(name: string) {
+      return name.toLowerCase() === "authorization" ? authorization : undefined;
+    },
+  } as Request;
+
+  const res = {
+    status(code: number) {
+      result.statusCode = code;
+      return this;
+    },
+    json(body: unknown) {
+      result.body = body;
+      return this;
+    },
+  } as Response;
+
+  requireAdminAuth(req, res, () => {
+    result.nextCalled = true;
+  });
+
+  return result;
 }
 
 function setAdminToken(value: string | undefined): () => void {
@@ -53,10 +60,13 @@ function setAdminToken(value: string | undefined): () => void {
 test("mutating scanner routes fail closed when no admin token is configured", async () => {
   const restore = setAdminToken(undefined);
   try {
-    const response = await requestProtectedSettings("anything");
+    const result = runAuth("Bearer anything");
 
-    assert.equal(response.status, 503);
-    assert.match(await response.text(), /SCANNER_ADMIN_TOKEN/);
+    assert.equal(result.statusCode, 503);
+    assert.deepEqual(result.body, {
+      error: "SCANNER_ADMIN_TOKEN is required for mutating scanner endpoints",
+    });
+    assert.equal(result.nextCalled, false);
   } finally {
     restore();
   }
@@ -65,10 +75,11 @@ test("mutating scanner routes fail closed when no admin token is configured", as
 test("mutating scanner routes require a bearer token", async () => {
   const restore = setAdminToken("correct-token");
   try {
-    const response = await requestProtectedSettings();
+    const result = runAuth();
 
-    assert.equal(response.status, 401);
-    assert.match(await response.text(), /Admin bearer token required/);
+    assert.equal(result.statusCode, 401);
+    assert.deepEqual(result.body, { error: "Admin bearer token required" });
+    assert.equal(result.nextCalled, false);
   } finally {
     restore();
   }
@@ -77,22 +88,24 @@ test("mutating scanner routes require a bearer token", async () => {
 test("mutating scanner routes reject incorrect bearer tokens", async () => {
   const restore = setAdminToken("correct-token");
   try {
-    const response = await requestProtectedSettings("wrong-token");
+    const result = runAuth("Bearer wrong-token");
 
-    assert.equal(response.status, 403);
-    assert.match(await response.text(), /Invalid admin bearer token/);
+    assert.equal(result.statusCode, 403);
+    assert.deepEqual(result.body, { error: "Invalid admin bearer token" });
+    assert.equal(result.nextCalled, false);
   } finally {
     restore();
   }
 });
 
-test("mutating scanner routes continue to route after a valid bearer token", async () => {
+test("mutating scanner routes continue after a valid bearer token", async () => {
   const restore = setAdminToken("correct-token");
   try {
-    const response = await requestProtectedSettings("correct-token");
+    const result = runAuth("Bearer correct-token");
 
-    assert.equal(response.status, 400);
-    assert.match(await response.text(), /Invalid settings payload/);
+    assert.equal(result.statusCode, null);
+    assert.equal(result.body, undefined);
+    assert.equal(result.nextCalled, true);
   } finally {
     restore();
   }
