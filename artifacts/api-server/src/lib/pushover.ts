@@ -1,6 +1,7 @@
 import { logger } from "./logger";
 
 const PUSHOVER_URL = "https://api.pushover.net/1/messages.json";
+const PUSHOVER_TIMEOUT_MS = 8_000;
 
 export interface PushoverMessage {
   title: string;
@@ -23,6 +24,8 @@ export async function sendPushover(msg: PushoverMessage): Promise<{
     };
   }
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), PUSHOVER_TIMEOUT_MS);
     const body = new URLSearchParams({
       token,
       user,
@@ -37,7 +40,8 @@ export async function sendPushover(msg: PushoverMessage): Promise<{
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
-    });
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
     const data = (await res.json().catch(() => ({}))) as {
       status?: number;
       errors?: string[];

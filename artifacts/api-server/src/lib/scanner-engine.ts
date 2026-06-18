@@ -5,7 +5,7 @@ import {
   settings as settingsTable,
   type Settings,
 } from "@workspace/db/schema";
-import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import {
   fetchL2Book,
@@ -69,6 +69,7 @@ class ScannerEngine {
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
   private pollCount = 0;
+  private pollInFlight = false;
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -80,8 +81,7 @@ class ScannerEngine {
       { intervalSec: this.currentIntervalSec },
       "Scanner engine starting",
     );
-    void this.runOnce();
-    this.scheduleNext();
+    void this.runOnce().finally(() => this.scheduleNext());
   }
 
   stop(): void {
@@ -94,27 +94,40 @@ class ScannerEngine {
     if (!this.running) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
+      this.timer = null;
       void this.runOnce().finally(() => this.scheduleNext());
     }, this.currentIntervalSec * 1000);
   }
 
   private async ensureDefaultSettings(): Promise<void> {
-    const existing = await db.select().from(settingsTable).limit(1);
+    const existing = await db
+      .select({ id: settingsTable.id })
+      .from(settingsTable)
+      .orderBy(asc(settingsTable.id))
+      .limit(1);
     if (existing.length === 0) {
-      await db.insert(settingsTable).values({});
+      await db.insert(settingsTable).values({ id: 1 }).onConflictDoNothing();
     }
   }
 
   async getSettings(): Promise<Settings> {
     await this.ensureDefaultSettings();
-    const [row] = await db.select().from(settingsTable).limit(1);
+    const [row] = await db
+      .select()
+      .from(settingsTable)
+      .orderBy(asc(settingsTable.id))
+      .limit(1);
     if (!row) throw new Error("Settings row missing after ensure");
     return row;
   }
 
   async updateSettings(patch: Partial<Settings>): Promise<Settings> {
     await this.ensureDefaultSettings();
-    const [existing] = await db.select().from(settingsTable).limit(1);
+    const [existing] = await db
+      .select()
+      .from(settingsTable)
+      .orderBy(asc(settingsTable.id))
+      .limit(1);
     if (!existing) throw new Error("Settings row missing");
     const updates: Partial<Settings> = { ...patch };
     delete updates.id;
@@ -151,6 +164,12 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn("Skipping scanner poll because a previous poll is still running");
+      return;
+    }
+
+    this.pollInFlight = true;
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
@@ -264,6 +283,8 @@ class ScannerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err }, "Scanner poll failed");
+    } finally {
+      this.pollInFlight = false;
     }
   }
 
@@ -491,29 +512,83 @@ class ScannerEngine {
 
       const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
       const triggerReason = this.buildTriggerReason(asset);
-      let pushoverSent = false;
+      const alertId = await this.claimAlert(asset, triggerReason, now, cutoff);
+      if (alertId == null) continue;
+
       if (settings.pushoverEnabled && rank >= minRank) {
         const result = await sendPushover({
           title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
           message: triggerReason,
           priority: asset.alertLevel === "A_PLUS_SETUP" ? 1 : 0,
         });
-        pushoverSent = result.success;
+        if (result.success) {
+          try {
+            await db
+              .update(alertsTable)
+              .set({ pushoverSent: true })
+              .where(eq(alertsTable.id, alertId));
+          } catch (err) {
+            logger.warn({ err, alertId }, "Failed to mark alert as pushed");
+          }
+        }
+      }
+    }
+  }
+
+  private async claimAlert(
+    asset: AssetState,
+    triggerReason: string,
+    now: number,
+    cutoff: Date,
+  ): Promise<number | null> {
+    const claimed = await db.transaction(async (tx) => {
+      await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(hashtext('scanner_alert'), hashtext(${asset.symbol}))
+      `);
+
+      const [recent] = await tx
+        .select({ createdAt: alertsTable.createdAt })
+        .from(alertsTable)
+        .where(
+          and(
+            eq(alertsTable.symbol, asset.symbol),
+            gte(alertsTable.createdAt, cutoff),
+          ),
+        )
+        .orderBy(desc(alertsTable.createdAt))
+        .limit(1);
+
+      if (recent) {
+        return { id: null, createdAt: recent.createdAt };
       }
 
-      await db.insert(alertsTable).values({
-        symbol: asset.symbol,
-        alertLevel: asset.alertLevel,
-        setupScore: asset.setupScore,
-        triggerReason,
-        markPrice: asset.markPrice,
-        dayChangePct: asset.dayChangePct,
-        rvol: asset.dailyRvol,
-        pushoverSent,
-        scoreBreakdown: asset.scoreBreakdown,
-      });
-      this.lastAlertAt.set(asset.symbol, now);
+      const [inserted] = await tx
+        .insert(alertsTable)
+        .values({
+          symbol: asset.symbol,
+          alertLevel: asset.alertLevel,
+          setupScore: asset.setupScore,
+          triggerReason,
+          markPrice: asset.markPrice,
+          dayChangePct: asset.dayChangePct,
+          rvol: asset.dailyRvol,
+          pushoverSent: false,
+          scoreBreakdown: asset.scoreBreakdown,
+        })
+        .returning({ id: alertsTable.id });
+
+      return { id: inserted?.id ?? null, createdAt: null };
+    });
+
+    if (claimed.id == null) {
+      if (claimed.createdAt) {
+        this.lastAlertAt.set(asset.symbol, claimed.createdAt.getTime());
+      }
+      return null;
     }
+
+    this.lastAlertAt.set(asset.symbol, now);
+    return claimed.id;
   }
 
   private buildTriggerReason(asset: AssetState): string {
