@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -10,7 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
-import { Save, Bell, Loader2 } from "lucide-react";
+import { Save, Bell, Loader2, KeyRound } from "lucide-react";
+import { getAdminToken, saveAdminToken } from "@/lib/admin-token";
 
 const settingsSchema = z.object({
   watchThreshold: z.coerce.number().min(0).max(100),
@@ -28,6 +29,7 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [adminToken, setAdminToken] = useState(() => getAdminToken());
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -65,10 +67,21 @@ export default function Settings() {
       onError: (err) => {
         toast({
           title: "Error",
-          description: "Failed to save settings.",
+          description: err instanceof Error ? err.message : "Failed to save settings.",
           variant: "destructive",
         });
       }
+    });
+  };
+
+  const handleSaveAdminToken = () => {
+    saveAdminToken(adminToken);
+    setAdminToken(getAdminToken());
+    toast({
+      title: adminToken.trim() ? "Admin Token Saved" : "Admin Token Cleared",
+      description: adminToken.trim()
+        ? "Protected scanner actions will include this bearer token."
+        : "Protected scanner actions now require a token before they can run.",
     });
   };
 
@@ -106,6 +119,32 @@ export default function Settings() {
     <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
       <div className="max-w-2xl mx-auto w-full">
         <h1 className="text-2xl font-black uppercase tracking-tight text-foreground mb-8 border-b border-border pb-4">Scanner Configuration</h1>
+
+        <div className="bg-card border border-border rounded-lg p-6 space-y-4 mb-8">
+          <h2 className="text-sm font-bold text-primary uppercase tracking-widest flex items-center gap-2">
+            <KeyRound className="h-4 w-4" />
+            Admin Access
+          </h2>
+          <div className="space-y-2">
+            <Label htmlFor="admin-token">Admin API Token</Label>
+            <Input
+              id="admin-token"
+              type="password"
+              value={adminToken}
+              onChange={(event) => setAdminToken(event.target.value)}
+              className="font-mono bg-background"
+              placeholder="SCANNER_ADMIN_TOKEN"
+              autoComplete="off"
+            />
+            <p className="text-xs text-muted-foreground">
+              Required for saving settings, dismissing alerts, and sending test notifications.
+              Set the matching SCANNER_ADMIN_TOKEN environment variable on the API server.
+            </p>
+          </div>
+          <Button type="button" variant="outline" onClick={handleSaveAdminToken} className="font-mono text-xs">
+            Save Token Locally
+          </Button>
+        </div>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
