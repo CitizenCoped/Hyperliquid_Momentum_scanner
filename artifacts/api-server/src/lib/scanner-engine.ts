@@ -508,7 +508,10 @@ class ScannerEngine {
     for (const asset of candidates) {
       const lastDb = recentBySymbol.get(asset.symbol);
       const rank = alertRank(asset.alertLevel);
-      if (shouldSuppressForCooldown(lastDb, rank, now, ALERT_COOLDOWN_MS)) {
+      if (
+        lastDb &&
+        shouldSuppressForCooldown(lastDb, rank, now, ALERT_COOLDOWN_MS)
+      ) {
         // Backfill in-memory cache so future cycles short-circuit.
         this.lastAlertAt.set(asset.symbol, lastDb);
         continue;
