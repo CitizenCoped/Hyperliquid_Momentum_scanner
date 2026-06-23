@@ -463,7 +463,8 @@ class ScannerEngine {
     if (candidates.length === 0) return;
 
     // DB-backed cooldown: pull most recent alert per symbol within the window.
-    // Survives restarts, scales to multiple workers (one row per fire).
+    // This is a fast skip only; each fire is re-checked under a DB advisory lock
+    // below so multiple API workers cannot race into duplicate notifications.
     const recent = await db.execute<{ symbol: string; created_at: Date }>(sql`
       SELECT DISTINCT ON (symbol) symbol, created_at
       FROM alerts
@@ -489,31 +490,98 @@ class ScannerEngine {
         continue;
       }
 
-      const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
-      const triggerReason = this.buildTriggerReason(asset);
-      let pushoverSent = false;
-      if (settings.pushoverEnabled && rank >= minRank) {
-        const result = await sendPushover({
-          title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
-          message: triggerReason,
-          priority: asset.alertLevel === "A_PLUS_SETUP" ? 1 : 0,
-        });
-        pushoverSent = result.success;
+      const result = await this.tryFireAlertWithLock({
+        asset,
+        settings,
+        minRank,
+        cutoff,
+      });
+      if (result.lastAlertAt) {
+        this.lastAlertAt.set(asset.symbol, result.lastAlertAt);
+      }
+    }
+  }
+
+  private async tryFireAlertWithLock({
+    asset,
+    settings,
+    minRank,
+    cutoff,
+  }: {
+    asset: AssetState;
+    settings: Settings;
+    minRank: number;
+    cutoff: Date;
+  }): Promise<{ lastAlertAt: number | null }> {
+    const created = await db.transaction(async (tx) => {
+      const lock = await tx.execute<{ locked: boolean }>(sql`
+        SELECT pg_try_advisory_xact_lock(hashtextextended(${asset.symbol}, 0::bigint)) AS "locked"
+      `);
+      const locked =
+        (lock.rows as Array<{ locked: boolean }>)[0]?.locked === true;
+      if (!locked) {
+        return null;
       }
 
-      await db.insert(alertsTable).values({
-        symbol: asset.symbol,
-        alertLevel: asset.alertLevel,
-        setupScore: asset.setupScore,
-        triggerReason,
-        markPrice: asset.markPrice,
-        dayChangePct: asset.dayChangePct,
-        rvol: asset.dailyRvol,
-        pushoverSent,
-        scoreBreakdown: asset.scoreBreakdown,
-      });
-      this.lastAlertAt.set(asset.symbol, now);
+      const [recent] = await tx
+        .select({ createdAt: alertsTable.createdAt })
+        .from(alertsTable)
+        .where(
+          and(
+            eq(alertsTable.symbol, asset.symbol),
+            gte(alertsTable.createdAt, cutoff),
+          ),
+        )
+        .orderBy(desc(alertsTable.createdAt))
+        .limit(1);
+
+      if (recent) {
+        return { id: null, createdAt: recent.createdAt };
+      }
+
+      const triggerReason = this.buildTriggerReason(asset);
+      const [inserted] = await tx
+        .insert(alertsTable)
+        .values({
+          symbol: asset.symbol,
+          alertLevel: asset.alertLevel,
+          setupScore: asset.setupScore,
+          triggerReason,
+          markPrice: asset.markPrice,
+          dayChangePct: asset.dayChangePct,
+          rvol: asset.dailyRvol,
+          pushoverSent: false,
+          scoreBreakdown: asset.scoreBreakdown,
+        })
+        .returning({ id: alertsTable.id, createdAt: alertsTable.createdAt });
+      if (!inserted) throw new Error("Failed to insert alert");
+      return { ...inserted, triggerReason };
+    });
+
+    if (!created) {
+      return { lastAlertAt: null };
     }
+
+    if (created.id === null) {
+      return { lastAlertAt: created.createdAt.getTime() };
+    }
+
+    const rank = ALERT_LEVEL_RANK[asset.alertLevel] ?? 0;
+    if (settings.pushoverEnabled && rank >= minRank) {
+      const result = await sendPushover({
+        title: `${asset.alertLevel.replace("_", " ")} ${asset.symbol} ${asset.setupScore}`,
+        message: created.triggerReason,
+        priority: asset.alertLevel === "A_PLUS_SETUP" ? 1 : 0,
+      });
+      if (result.success) {
+        await db
+          .update(alertsTable)
+          .set({ pushoverSent: true })
+          .where(eq(alertsTable.id, created.id));
+      }
+    }
+
+    return { lastAlertAt: created.createdAt.getTime() };
   }
 
   private buildTriggerReason(asset: AssetState): string {
@@ -608,6 +676,3 @@ class ScannerEngine {
 }
 
 export const scanner = new ScannerEngine();
-
-// Suppress unused import warning for `gte` (kept for future use)
-void gte;
