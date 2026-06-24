@@ -65,6 +65,7 @@ class ScannerEngine {
   private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private pollInFlight = false;
   private currentIntervalSec = 15;
   private lastUpdated: Date | null = null;
   private lastError: string | null = null;
@@ -138,7 +139,14 @@ class ScannerEngine {
   }
 
   getAsset(symbol: string): AssetState | null {
-    return this.state.get(symbol) ?? null;
+    const exact = this.state.get(symbol);
+    if (exact) return exact;
+
+    const normalized = symbol.toLowerCase();
+    for (const asset of this.state.values()) {
+      if (asset.symbol.toLowerCase() === normalized) return asset;
+    }
+    return null;
   }
 
   getStatus() {
@@ -151,6 +159,12 @@ class ScannerEngine {
   }
 
   private async runOnce(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn("Scanner poll skipped because previous poll is still running");
+      return;
+    }
+
+    this.pollInFlight = true;
     try {
       const settings = await this.getSettings();
       const snapshots = await fetchPerpSnapshots();
@@ -264,6 +278,8 @@ class ScannerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       logger.error({ err }, "Scanner poll failed");
+    } finally {
+      this.pollInFlight = false;
     }
   }
 
