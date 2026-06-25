@@ -64,6 +64,8 @@ class ScannerEngine {
   private bookCache = new Map<string, BookCacheEntry>();
   private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
+  private pollInFlight: Promise<void> | null = null;
+  private bookRefreshInFlight: Promise<void> | null = null;
   private running = false;
   private currentIntervalSec = 15;
   private lastUpdated: Date | null = null;
@@ -80,7 +82,7 @@ class ScannerEngine {
       { intervalSec: this.currentIntervalSec },
       "Scanner engine starting",
     );
-    void this.runOnce();
+    void this.runOnceIfIdle();
     this.scheduleNext();
   }
 
@@ -94,8 +96,25 @@ class ScannerEngine {
     if (!this.running) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
-      void this.runOnce().finally(() => this.scheduleNext());
+      void this.runOnceIfIdle().finally(() => this.scheduleNext());
     }, this.currentIntervalSec * 1000);
+  }
+
+  private runOnceIfIdle(): Promise<void> {
+    if (this.pollInFlight) {
+      logger.warn(
+        "Skipping scanner poll because the previous poll is still running",
+      );
+      return this.pollInFlight;
+    }
+
+    const poll = this.runOnce().finally(() => {
+      if (this.pollInFlight === poll) {
+        this.pollInFlight = null;
+      }
+    });
+    this.pollInFlight = poll;
+    return poll;
   }
 
   private async ensureDefaultSettings(): Promise<void> {
@@ -251,8 +270,9 @@ class ScannerEngine {
       this.lastError = null;
       this.pollCount += 1;
 
-      // Refresh book stats for top N
-      void this.refreshTopBooks(snapshots);
+      // Refresh book stats for top N without allowing slow dependency calls
+      // to pile up across scan intervals.
+      this.refreshTopBooksIfIdle(snapshots);
 
       // Trigger alerts
       await this.maybeFireAlerts(settings);
@@ -442,6 +462,27 @@ class ScannerEngine {
       }
       await new Promise((r) => setTimeout(r, 50));
     }
+  }
+
+  private refreshTopBooksIfIdle(snapshots: HyperliquidAssetSnapshot[]): void {
+    if (this.bookRefreshInFlight) {
+      logger.debug(
+        "Skipping book refresh because the previous refresh is still running",
+      );
+      return;
+    }
+
+    const refresh = this.refreshTopBooks(snapshots)
+      .catch((err) => {
+        logger.warn({ err }, "Book refresh failed");
+      })
+      .finally(() => {
+        if (this.bookRefreshInFlight === refresh) {
+          this.bookRefreshInFlight = null;
+        }
+      });
+    this.bookRefreshInFlight = refresh;
+    void refresh;
   }
 
   private async maybeFireAlerts(settings: Settings): Promise<void> {
