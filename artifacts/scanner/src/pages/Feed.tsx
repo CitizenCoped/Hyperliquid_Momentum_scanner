@@ -5,9 +5,11 @@ import { PulseNumber } from "@/components/ui/pulse-number";
 import { formatPercent, formatNumber } from "@/lib/format";
 import { BellRing, Check, BellOff } from "lucide-react";
 import { useLocation } from "wouter";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Feed() {
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
   const { data: alerts = [], refetch } = useListAlerts(
     { limit: 100 },
     { query: { refetchInterval: 5000 } }
@@ -18,7 +20,14 @@ export default function Feed() {
   const handleDismiss = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
     dismissAlert.mutate({ id }, {
-      onSuccess: () => refetch()
+      onSuccess: () => refetch(),
+      onError: () => {
+        toast({
+          title: "Dismiss Failed",
+          description: "Enter the admin write token in Settings before dismissing alerts.",
+          variant: "destructive",
+        });
+      },
     });
   };
 

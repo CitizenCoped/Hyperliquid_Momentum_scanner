@@ -8,8 +8,11 @@ import Board from "@/pages/Board";
 import Feed from "@/pages/Feed";
 import Asset from "@/pages/Asset";
 import Settings from "@/pages/Settings";
+import { configureAdminTokenAuth } from "@/lib/admin-token";
 
 const queryClient = new QueryClient();
+
+configureAdminTokenAuth();
 
 function Router() {
   return (
