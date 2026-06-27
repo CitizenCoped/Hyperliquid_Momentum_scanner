@@ -159,6 +159,8 @@ paths:
       operationId: dismissAlert
       tags: [alerts]
       summary: Dismiss an alert
+      security:
+        - ScannerAdminBearer: []
       parameters:
         - name: id
           in: path
@@ -172,12 +174,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Alert"
+        "401":
+          description: Admin write token missing or invalid
+        "503":
+          description: Admin write token is not configured on the server
 
   /alerts/test-pushover:
     post:
       operationId: testPushover
       tags: [alerts]
       summary: Send a test Pushover notification
+      security:
+        - ScannerAdminBearer: []
       responses:
         "200":
           description: Test notification sent
@@ -185,6 +193,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TestPushoverResponse"
+        "401":
+          description: Admin write token missing or invalid
+        "503":
+          description: Admin write token is not configured on the server
 
   /settings:
     get:
@@ -202,6 +214,8 @@ paths:
       operationId: updateSettings
       tags: [settings]
       summary: Update alert settings
+      security:
+        - ScannerAdminBearer: []
       requestBody:
         required: true
         content:
@@ -215,8 +229,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Settings"
+        "401":
+          description: Admin write token missing or invalid
+        "503":
+          description: Admin write token is not configured on the server
 
 components:
+  securitySchemes:
+    ScannerAdminBearer:
+      type: http
+      scheme: bearer
+      description: Admin write token from SCANNER_WRITE_TOKEN.
+
   schemas:
     HealthStatus:
       type: object
