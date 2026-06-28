@@ -45,6 +45,13 @@ async function request(
   }
 }
 
+async function readJsonObject(response: Response): Promise<Record<string, unknown>> {
+  const body = await response.json();
+  assert.equal(typeof body, "object");
+  assert.notEqual(body, null);
+  return body as Record<string, unknown>;
+}
+
 test("allows public read requests without a write token", async () => {
   const response = await request("GET", "/api/settings");
 
@@ -56,7 +63,10 @@ test("rejects write requests when the server token is not configured", async () 
   const response = await request("PUT", "/api/settings");
 
   assert.equal(response.status, 503);
-  assert.match((await response.json()).error, /SCANNER_WRITE_TOKEN/);
+  const body = await readJsonObject(response);
+  const error = body.error;
+  assert.equal(typeof error, "string");
+  assert.match(error, /SCANNER_WRITE_TOKEN/);
 });
 
 test("rejects write requests without credentials", async () => {
