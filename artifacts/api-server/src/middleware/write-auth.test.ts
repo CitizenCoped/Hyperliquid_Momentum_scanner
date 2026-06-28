@@ -65,7 +65,9 @@ test("rejects write requests when the server token is not configured", async () 
   assert.equal(response.status, 503);
   const body = await readJsonObject(response);
   const error = body.error;
-  assert.equal(typeof error, "string");
+  if (typeof error !== "string") {
+    throw new TypeError("Expected error response body to contain a string error");
+  }
   assert.match(error, /SCANNER_WRITE_TOKEN/);
 });
 
