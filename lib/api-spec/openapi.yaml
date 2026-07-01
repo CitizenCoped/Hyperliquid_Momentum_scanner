@@ -159,6 +159,8 @@ paths:
       operationId: dismissAlert
       tags: [alerts]
       summary: Dismiss an alert
+      security:
+        - scannerWriteToken: []
       parameters:
         - name: id
           in: path
@@ -178,6 +180,8 @@ paths:
       operationId: testPushover
       tags: [alerts]
       summary: Send a test Pushover notification
+      security:
+        - scannerWriteToken: []
       responses:
         "200":
           description: Test notification sent
@@ -202,6 +206,8 @@ paths:
       operationId: updateSettings
       tags: [settings]
       summary: Update alert settings
+      security:
+        - scannerWriteToken: []
       requestBody:
         required: true
         content:
@@ -217,6 +223,15 @@ paths:
                 $ref: "#/components/schemas/Settings"
 
 components:
+  securitySchemes:
+    scannerWriteToken:
+      type: apiKey
+      in: header
+      name: x-scanner-write-token
+      description: >
+        Required for mutating scanner operations. The same token may also be
+        sent as an Authorization bearer token.
+
   schemas:
     HealthStatus:
       type: object
