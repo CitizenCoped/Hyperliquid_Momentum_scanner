@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
+import { getScannerWriteToken, setScannerWriteToken } from "@/lib/write-token";
 import { Save, Bell, Loader2 } from "lucide-react";
 
 const settingsSchema = z.object({
@@ -28,6 +29,7 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [writeToken, setWriteTokenInput] = useState(() => getScannerWriteToken() ?? "");
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -98,6 +100,14 @@ export default function Settings() {
     });
   };
 
+  const handleSaveWriteToken = () => {
+    setScannerWriteToken(writeToken);
+    toast({
+      title: writeToken.trim() ? "Write Token Saved" : "Write Token Cleared",
+      description: "Mutating API calls will use the local scanner write token.",
+    });
+  };
+
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground font-mono">LOADING SETTINGS...</div>;
   }
@@ -106,6 +116,33 @@ export default function Settings() {
     <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
       <div className="max-w-2xl mx-auto w-full">
         <h1 className="text-2xl font-black uppercase tracking-tight text-foreground mb-8 border-b border-border pb-4">Scanner Configuration</h1>
+
+        <div className="bg-card border border-border rounded-lg p-6 space-y-4 mb-8">
+          <h2 className="text-sm font-bold text-primary uppercase tracking-widest">
+            Write Access
+          </h2>
+          <div className="space-y-2">
+            <Label htmlFor="scanner-write-token">Scanner Write Token</Label>
+            <div className="flex gap-2">
+              <Input
+                id="scanner-write-token"
+                type="password"
+                value={writeToken}
+                onChange={(event) => setWriteTokenInput(event.target.value)}
+                placeholder="Enter SCANNER_WRITE_TOKEN"
+                className="font-mono bg-background"
+                autoComplete="off"
+              />
+              <Button type="button" variant="outline" onClick={handleSaveWriteToken}>
+                Save Token
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Required to save settings, dismiss alerts, or send test notifications.
+              The token is stored only in this browser.
+            </p>
+          </div>
+        </div>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
