@@ -1,4 +1,9 @@
-import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/api-client-react";
+import {
+  useGetSettings,
+  useUpdateSettings,
+  useTestPushover,
+  type TestPushoverResponse,
+} from "@workspace/api-client-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -65,7 +70,7 @@ export default function Settings() {
           description: "Scanner settings have been updated.",
         });
       },
-      onError: (err) => {
+      onError: (err: unknown) => {
         toast({
           title: "Error",
           description:
@@ -89,7 +94,7 @@ export default function Settings() {
 
   const handleTestNotification = () => {
     testPushover.mutate(undefined, {
-      onSuccess: (res) => {
+      onSuccess: (res: TestPushoverResponse) => {
         if (res.success) {
           toast({
             title: "Test Sent",
@@ -103,7 +108,7 @@ export default function Settings() {
           });
         }
       },
-      onError: (err) => {
+      onError: (err: unknown) => {
         toast({
           title: "Error",
           description:
