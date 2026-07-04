@@ -5,9 +5,11 @@ import { PulseNumber } from "@/components/ui/pulse-number";
 import { formatPercent, formatNumber } from "@/lib/format";
 import { BellRing, Check, BellOff } from "lucide-react";
 import { useLocation } from "wouter";
+import { getScannerWriteToken } from "@/lib/api-auth";
 
 export default function Feed() {
   const [, setLocation] = useLocation();
+  const hasWriteToken = Boolean(getScannerWriteToken());
   const { data: alerts = [], refetch } = useListAlerts(
     { limit: 100 },
     { query: { refetchInterval: 5000 } }
@@ -17,6 +19,7 @@ export default function Feed() {
 
   const handleDismiss = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
+    if (!hasWriteToken) return;
     dismissAlert.mutate({ id }, {
       onSuccess: () => refetch()
     });
@@ -75,8 +78,9 @@ export default function Feed() {
                 {!alert.dismissed && (
                   <button 
                     onClick={(e) => handleDismiss(e, alert.id)}
+                    disabled={!hasWriteToken}
                     className="p-1.5 bg-muted hover:bg-secondary text-foreground rounded border border-border hover:border-primary transition-colors"
-                    title="Dismiss Alert"
+                    title={hasWriteToken ? "Dismiss Alert" : "Enter scanner write token in Settings"}
                   >
                     <Check className="h-4 w-4" />
                   </button>
