@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { Save, Bell, Loader2 } from "lucide-react";
+import { getScannerWriteToken, setScannerWriteToken } from "@/lib/api-auth";
 
 const settingsSchema = z.object({
   watchThreshold: z.coerce.number().min(0).max(100),
@@ -28,6 +29,8 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [writeToken, setWriteTokenState] = useState(() => getScannerWriteToken() ?? "");
+  const hasWriteToken = writeToken.trim().length > 0;
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -54,7 +57,21 @@ export default function Settings() {
     }
   }, [settings, form]);
 
+  const handleWriteTokenChange = (value: string) => {
+    setWriteTokenState(value);
+    setScannerWriteToken(value);
+  };
+
   const onSubmit = (data: SettingsFormValues) => {
+    if (!hasWriteToken) {
+      toast({
+        title: "Write Token Required",
+        description: "Enter the scanner write token before saving settings.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     updateSettings.mutate({ data }, {
       onSuccess: () => {
         toast({
@@ -65,7 +82,7 @@ export default function Settings() {
       onError: (err) => {
         toast({
           title: "Error",
-          description: "Failed to save settings.",
+          description: "Failed to save settings. Check the scanner write token.",
           variant: "destructive",
         });
       }
@@ -73,6 +90,15 @@ export default function Settings() {
   };
 
   const handleTestNotification = () => {
+    if (!hasWriteToken) {
+      toast({
+        title: "Write Token Required",
+        description: "Enter the scanner write token before testing Pushover.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     testPushover.mutate(undefined, {
       onSuccess: (res) => {
         if (res.success) {
@@ -91,7 +117,7 @@ export default function Settings() {
       onError: () => {
         toast({
           title: "Error",
-          description: "Failed to connect to Pushover API.",
+          description: "Failed to connect to Pushover API. Check the scanner write token.",
           variant: "destructive",
         });
       }
@@ -109,6 +135,26 @@ export default function Settings() {
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+            <div className="bg-card border border-border rounded-lg p-6 space-y-4">
+              <h2 className="text-sm font-bold text-primary uppercase tracking-widest">
+                Write Access
+              </h2>
+              <div className="space-y-2">
+                <Label htmlFor="scanner-write-token">Scanner Write Token</Label>
+                <Input
+                  id="scanner-write-token"
+                  type="password"
+                  autoComplete="off"
+                  value={writeToken}
+                  onChange={(event) => handleWriteTokenChange(event.target.value)}
+                  className="font-mono bg-background"
+                  placeholder="Enter SCANNER_WRITE_TOKEN"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Required for saving settings, dismissing alerts, and sending test notifications. Stored locally in this browser.
+                </p>
+              </div>
+            </div>
             
             <div className="bg-card border border-border rounded-lg p-6 space-y-6">
               <h2 className="text-sm font-bold text-primary uppercase tracking-widest flex items-center gap-2">
@@ -167,7 +213,7 @@ export default function Settings() {
                   variant="outline" 
                   size="sm" 
                   onClick={handleTestNotification}
-                  disabled={testPushover.isPending || !form.watch("pushoverEnabled")}
+                  disabled={testPushover.isPending || !form.watch("pushoverEnabled") || !hasWriteToken}
                   className="font-mono text-xs"
                 >
                   {testPushover.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Bell className="h-4 w-4 mr-2" />}
@@ -251,7 +297,7 @@ export default function Settings() {
               <Button 
                 type="submit" 
                 size="lg" 
-                disabled={updateSettings.isPending}
+                disabled={updateSettings.isPending || !hasWriteToken}
                 className="font-bold tracking-widest uppercase px-8"
               >
                 {updateSettings.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}

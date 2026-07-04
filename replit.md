@@ -50,4 +50,5 @@ A real-time setup-discovery tool for Hyperliquid perpetuals, inspired by Ross Ca
 ### Secrets used
 - `QUICKNODE_HTTP_URL`, `QUICKNODE_WSS_URL` — reserved for future streaming/gRPC enhancements.
 - `PUSHOVER_APP_TOKEN`, `PUSHOVER_USER_KEY` — push notifications.
+- `SCANNER_WRITE_TOKEN` — required shared token for mutating scanner API calls (`Authorization: Bearer ...` or `x-scanner-write-token`).
 - `SESSION_SECRET`, `DATABASE_URL` — standard.
