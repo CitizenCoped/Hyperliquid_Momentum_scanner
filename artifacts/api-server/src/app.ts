@@ -3,6 +3,7 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { requireScannerWriteToken } from "./lib/write-auth";
 
 const app: Express = express();
 
@@ -26,6 +27,7 @@ app.use(
   }),
 );
 app.use(cors());
+app.use("/api", requireScannerWriteToken());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
