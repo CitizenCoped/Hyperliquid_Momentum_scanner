@@ -1,15 +1,20 @@
-import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/api-client-react";
+import {
+  useGetSettings,
+  useUpdateSettings,
+  useTestPushover,
+  type TestPushoverResponse,
+} from "@workspace/api-client-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
+import { getScannerWriteToken, setScannerWriteToken } from "@/lib/write-token";
 import { Save, Bell, Loader2 } from "lucide-react";
 
 const settingsSchema = z.object({
@@ -28,6 +33,9 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [writeToken, setWriteTokenValue] = useState(
+    () => getScannerWriteToken() ?? "",
+  );
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -62,19 +70,31 @@ export default function Settings() {
           description: "Scanner settings have been updated.",
         });
       },
-      onError: (err) => {
+      onError: (err: unknown) => {
         toast({
           title: "Error",
-          description: "Failed to save settings.",
+          description:
+            err instanceof Error ? err.message : "Failed to save settings.",
           variant: "destructive",
         });
       }
     });
   };
 
+  const handleSaveWriteToken = () => {
+    setScannerWriteToken(writeToken);
+    setWriteTokenValue(getScannerWriteToken() ?? "");
+    toast({
+      title: "Write Token Saved",
+      description: writeToken.trim()
+        ? "This browser will authorize scanner write actions."
+        : "Write token cleared from this browser.",
+    });
+  };
+
   const handleTestNotification = () => {
     testPushover.mutate(undefined, {
-      onSuccess: (res) => {
+      onSuccess: (res: TestPushoverResponse) => {
         if (res.success) {
           toast({
             title: "Test Sent",
@@ -88,10 +108,13 @@ export default function Settings() {
           });
         }
       },
-      onError: () => {
+      onError: (err: unknown) => {
         toast({
           title: "Error",
-          description: "Failed to connect to Pushover API.",
+          description:
+            err instanceof Error
+              ? err.message
+              : "Failed to connect to Pushover API.",
           variant: "destructive",
         });
       }
@@ -106,6 +129,35 @@ export default function Settings() {
     <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
       <div className="max-w-2xl mx-auto w-full">
         <h1 className="text-2xl font-black uppercase tracking-tight text-foreground mb-8 border-b border-border pb-4">Scanner Configuration</h1>
+
+        <div className="bg-card border border-border rounded-lg p-6 space-y-4 mb-8">
+          <h2 className="text-sm font-bold text-primary uppercase tracking-widest">
+            Write Access Token
+          </h2>
+          <div className="flex flex-col md:flex-row gap-3">
+            <Input
+              type="password"
+              value={writeToken}
+              onChange={(event) => setWriteTokenValue(event.target.value)}
+              placeholder="SCANNER_WRITE_TOKEN"
+              autoComplete="off"
+              className="font-mono bg-background"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleSaveWriteToken}
+              className="font-mono uppercase"
+            >
+              Save Token
+            </Button>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Settings changes, alert dismissal, and test notifications require
+            the shared token configured on the API server. The token is stored
+            only in this browser.
+          </p>
+        </div>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
@@ -203,7 +255,7 @@ export default function Settings() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Minimum Alert Level for Push</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger className="bg-background">
                             <SelectValue placeholder="Select a level" />
