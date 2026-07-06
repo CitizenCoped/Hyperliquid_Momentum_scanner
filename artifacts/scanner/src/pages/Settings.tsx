@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
+import { getScannerWriteToken, setScannerWriteToken } from "@/lib/write-token";
 import { Save, Bell, Loader2 } from "lucide-react";
 
 const settingsSchema = z.object({
@@ -28,6 +29,7 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [writeToken, setWriteToken] = useState(() => getScannerWriteToken() ?? "");
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -72,6 +74,16 @@ export default function Settings() {
     });
   };
 
+  const handleSaveWriteToken = () => {
+    setScannerWriteToken(writeToken);
+    toast({
+      title: writeToken.trim() ? "Write Token Saved" : "Write Token Cleared",
+      description: writeToken.trim()
+        ? "Protected scanner actions will include this token."
+        : "Protected scanner actions will fail until a token is saved.",
+    });
+  };
+
   const handleTestNotification = () => {
     testPushover.mutate(undefined, {
       onSuccess: (res) => {
@@ -91,7 +103,7 @@ export default function Settings() {
       onError: () => {
         toast({
           title: "Error",
-          description: "Failed to connect to Pushover API.",
+          description: "Failed to connect to Pushover API. Check your write token.",
           variant: "destructive",
         });
       }
@@ -109,6 +121,38 @@ export default function Settings() {
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+            <div className="bg-card border border-border rounded-lg p-6 space-y-4">
+              <div>
+                <h2 className="text-sm font-bold text-primary uppercase tracking-widest">
+                  Write Access
+                </h2>
+                <p className="text-sm text-muted-foreground mt-2">
+                  Enter the scanner write token for protected actions like saving settings,
+                  dismissing alerts, and sending test notifications.
+                </p>
+              </div>
+              <div className="flex flex-col md:flex-row gap-3">
+                <div className="flex-1">
+                  <Label htmlFor="scanner-write-token">Scanner Write Token</Label>
+                  <Input
+                    id="scanner-write-token"
+                    type="password"
+                    value={writeToken}
+                    onChange={(event) => setWriteToken(event.target.value)}
+                    className="font-mono bg-background mt-2"
+                    autoComplete="off"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleSaveWriteToken}
+                  className="font-mono md:self-end"
+                >
+                  Save Token
+                </Button>
+              </div>
+            </div>
             
             <div className="bg-card border border-border rounded-lg p-6 space-y-6">
               <h2 className="text-sm font-bold text-primary uppercase tracking-widest flex items-center gap-2">

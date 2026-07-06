@@ -159,6 +159,9 @@ paths:
       operationId: dismissAlert
       tags: [alerts]
       summary: Dismiss an alert
+      security:
+        - ScannerWriteToken: []
+        - ScannerWriteTokenHeader: []
       parameters:
         - name: id
           in: path
@@ -172,12 +175,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Alert"
+        "401":
+          description: Missing or invalid scanner write token
+        "503":
+          description: Scanner write token is not configured
 
   /alerts/test-pushover:
     post:
       operationId: testPushover
       tags: [alerts]
       summary: Send a test Pushover notification
+      security:
+        - ScannerWriteToken: []
+        - ScannerWriteTokenHeader: []
       responses:
         "200":
           description: Test notification sent
@@ -185,6 +195,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TestPushoverResponse"
+        "401":
+          description: Missing or invalid scanner write token
+        "503":
+          description: Scanner write token is not configured
 
   /settings:
     get:
@@ -202,6 +216,9 @@ paths:
       operationId: updateSettings
       tags: [settings]
       summary: Update alert settings
+      security:
+        - ScannerWriteToken: []
+        - ScannerWriteTokenHeader: []
       requestBody:
         required: true
         content:
@@ -215,8 +232,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Settings"
+        "401":
+          description: Missing or invalid scanner write token
+        "503":
+          description: Scanner write token is not configured
 
 components:
+  securitySchemes:
+    ScannerWriteToken:
+      type: http
+      scheme: bearer
+      bearerFormat: scanner-write-token
+    ScannerWriteTokenHeader:
+      type: apiKey
+      in: header
+      name: x-scanner-write-token
+
   schemas:
     HealthStatus:
       type: object
