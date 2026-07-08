@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ScannerEngine } from "./scanner-engine";
 
 describe("scanner engine startup", () => {
   it("does not remain running after startup initialization fails", async () => {
+    process.env.DATABASE_URL ??= "postgres://scanner-test:scanner-test@localhost/scanner_test";
+    const { ScannerEngine } = await import("./scanner-engine");
     const engine = new ScannerEngine();
     const transientError = new Error("transient settings failure");
     let attempts = 0;
