@@ -59,7 +59,7 @@ interface BookCacheEntry {
   fetchedAt: number;
 }
 
-class ScannerEngine {
+export class ScannerEngine {
   private state = new Map<string, AssetState>();
   private bookCache = new Map<string, BookCacheEntry>();
   private lastAlertAt = new Map<string, number>();
@@ -73,15 +73,22 @@ class ScannerEngine {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-    await this.ensureDefaultSettings();
-    const s = await this.getSettings();
-    this.currentIntervalSec = s.scanIntervalSeconds;
-    logger.info(
-      { intervalSec: this.currentIntervalSec },
-      "Scanner engine starting",
-    );
-    void this.runOnce();
-    this.scheduleNext();
+    try {
+      await this.ensureDefaultSettings();
+      const s = await this.getSettings();
+      this.currentIntervalSec = s.scanIntervalSeconds;
+      logger.info(
+        { intervalSec: this.currentIntervalSec },
+        "Scanner engine starting",
+      );
+      void this.runOnce();
+      this.scheduleNext();
+    } catch (err) {
+      this.running = false;
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = null;
+      throw err;
+    }
   }
 
   stop(): void {
