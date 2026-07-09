@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
+import { getScannerWriteToken, saveScannerWriteToken } from "@/lib/write-token";
 import { Save, Bell, Loader2 } from "lucide-react";
 
 const settingsSchema = z.object({
@@ -28,6 +29,7 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [writeToken, setWriteToken] = useState(() => getScannerWriteToken());
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -55,6 +57,7 @@ export default function Settings() {
   }, [settings, form]);
 
   const onSubmit = (data: SettingsFormValues) => {
+    saveScannerWriteToken(writeToken);
     updateSettings.mutate({ data }, {
       onSuccess: () => {
         toast({
@@ -72,7 +75,18 @@ export default function Settings() {
     });
   };
 
+  const handleSaveWriteToken = () => {
+    saveScannerWriteToken(writeToken);
+    toast({
+      title: "Write Token Saved",
+      description: writeToken.trim()
+        ? "Mutating scanner requests will include the saved token."
+        : "Saved token cleared; mutating scanner requests will be rejected.",
+    });
+  };
+
   const handleTestNotification = () => {
+    saveScannerWriteToken(writeToken);
     testPushover.mutate(undefined, {
       onSuccess: (res) => {
         if (res.success) {
@@ -109,6 +123,35 @@ export default function Settings() {
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+            <div className="bg-card border border-border rounded-lg p-6 space-y-4">
+              <h2 className="text-sm font-bold text-primary uppercase tracking-widest">
+                Write Access
+              </h2>
+              <div className="space-y-2">
+                <Label htmlFor="scanner-write-token">Scanner Write Token</Label>
+                <Input
+                  id="scanner-write-token"
+                  type="password"
+                  value={writeToken}
+                  onChange={(event) => setWriteToken(event.target.value)}
+                  placeholder="Paste SCANNER_WRITE_TOKEN"
+                  autoComplete="off"
+                  className="font-mono bg-background"
+                />
+                <p className="text-sm text-muted-foreground">
+                  Required for saving settings, testing Pushover, and dismissing alerts.
+                  The token is stored only in this browser.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleSaveWriteToken}
+                className="font-mono text-xs"
+              >
+                Save Token
+              </Button>
+            </div>
             
             <div className="bg-card border border-border rounded-lg p-6 space-y-6">
               <h2 className="text-sm font-bold text-primary uppercase tracking-widest flex items-center gap-2">
@@ -203,7 +246,7 @@ export default function Settings() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Minimum Alert Level for Push</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger className="bg-background">
                             <SelectValue placeholder="Select a level" />
