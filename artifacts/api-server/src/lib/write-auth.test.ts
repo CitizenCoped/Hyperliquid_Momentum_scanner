@@ -14,7 +14,10 @@ afterEach(() => {
   }
 });
 
-async function makeRequest(method: string, headers?: HeadersInit): Promise<Response> {
+async function makeRequest(
+  method: string,
+  headers?: Record<string, string>,
+): Promise<Response> {
   const app = express();
   app.use(requireScannerWriteAuth);
   app.all("/resource", (_req, res) => {
