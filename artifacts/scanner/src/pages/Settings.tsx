@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { Save, Bell, Loader2 } from "lucide-react";
+import { getScannerWriteToken, setScannerWriteToken } from "@/lib/write-token";
 
 const settingsSchema = z.object({
   watchThreshold: z.coerce.number().min(0).max(100),
@@ -28,6 +29,7 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [writeToken, setWriteToken] = useState(() => getScannerWriteToken() ?? "");
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -72,6 +74,11 @@ export default function Settings() {
     });
   };
 
+  const handleWriteTokenChange = (value: string) => {
+    setWriteToken(value);
+    setScannerWriteToken(value);
+  };
+
   const handleTestNotification = () => {
     testPushover.mutate(undefined, {
       onSuccess: (res) => {
@@ -106,6 +113,27 @@ export default function Settings() {
     <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
       <div className="max-w-2xl mx-auto w-full">
         <h1 className="text-2xl font-black uppercase tracking-tight text-foreground mb-8 border-b border-border pb-4">Scanner Configuration</h1>
+
+        <div className="bg-card border border-border rounded-lg p-6 space-y-4 mb-8">
+          <h2 className="text-sm font-bold text-primary uppercase tracking-widest">
+            Write Access
+          </h2>
+          <div className="space-y-2">
+            <Label htmlFor="scanner-write-token">Scanner Write Token</Label>
+            <Input
+              id="scanner-write-token"
+              type="password"
+              value={writeToken}
+              onChange={(event) => handleWriteTokenChange(event.target.value)}
+              placeholder="Enter SCANNER_WRITE_TOKEN"
+              autoComplete="off"
+              className="font-mono bg-background"
+            />
+            <p className="text-sm text-muted-foreground">
+              Required for saving settings, dismissing alerts, and sending test notifications. The token is stored only in this browser.
+            </p>
+          </div>
+        </div>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
