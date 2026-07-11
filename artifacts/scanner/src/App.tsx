@@ -1,5 +1,6 @@
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { setAuthTokenGetter } from "@workspace/api-client-react";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
@@ -8,8 +9,10 @@ import Board from "@/pages/Board";
 import Feed from "@/pages/Feed";
 import Asset from "@/pages/Asset";
 import Settings from "@/pages/Settings";
+import { getStoredScannerWriteToken } from "@/lib/write-token";
 
 const queryClient = new QueryClient();
+setAuthTokenGetter(getStoredScannerWriteToken);
 
 function Router() {
   return (

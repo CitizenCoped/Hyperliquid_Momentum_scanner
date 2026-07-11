@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { Save, Bell, Loader2 } from "lucide-react";
+import { SCANNER_WRITE_TOKEN_STORAGE_KEY } from "@/lib/write-token";
 
 const settingsSchema = z.object({
   watchThreshold: z.coerce.number().min(0).max(100),
@@ -24,10 +25,14 @@ const settingsSchema = z.object({
 type SettingsFormValues = z.infer<typeof settingsSchema>;
 
 export default function Settings() {
-  const { data: settings, isLoading } = useGetSettings();
+  const { data: settings, isLoading, isError, refetch } = useGetSettings();
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [writeToken, setWriteToken] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem(SCANNER_WRITE_TOKEN_STORAGE_KEY) ?? "";
+  });
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -54,6 +59,15 @@ export default function Settings() {
     }
   }, [settings, form]);
 
+  useEffect(() => {
+    const token = writeToken.trim();
+    if (token) {
+      window.localStorage.setItem(SCANNER_WRITE_TOKEN_STORAGE_KEY, token);
+    } else {
+      window.localStorage.removeItem(SCANNER_WRITE_TOKEN_STORAGE_KEY);
+    }
+  }, [writeToken]);
+
   const onSubmit = (data: SettingsFormValues) => {
     updateSettings.mutate({ data }, {
       onSuccess: () => {
@@ -65,7 +79,7 @@ export default function Settings() {
       onError: (err) => {
         toast({
           title: "Error",
-          description: "Failed to save settings.",
+          description: "Failed to save settings. Check your write token and try again.",
           variant: "destructive",
         });
       }
@@ -91,7 +105,7 @@ export default function Settings() {
       onError: () => {
         toast({
           title: "Error",
-          description: "Failed to connect to Pushover API.",
+          description: "Failed to connect to Pushover API. Check your write token and try again.",
           variant: "destructive",
         });
       }
@@ -102,6 +116,17 @@ export default function Settings() {
     return <div className="p-8 text-center text-muted-foreground font-mono">LOADING SETTINGS...</div>;
   }
 
+  if (isError || !settings) {
+    return (
+      <div className="p-8 text-center text-muted-foreground font-mono space-y-4">
+        <div>FAILED TO LOAD SETTINGS.</div>
+        <Button type="button" variant="outline" onClick={() => refetch()}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full bg-background overflow-y-auto p-4 md:p-8">
       <div className="max-w-2xl mx-auto w-full">
@@ -109,6 +134,25 @@ export default function Settings() {
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+            <div className="bg-card border border-border rounded-lg p-6 space-y-3">
+              <h2 className="text-sm font-bold text-primary uppercase tracking-widest">
+                Write Access
+              </h2>
+              <div className="space-y-2">
+                <Label htmlFor="scanner-write-token">Scanner Write Token</Label>
+                <Input
+                  id="scanner-write-token"
+                  type="password"
+                  value={writeToken}
+                  onChange={(event) => setWriteToken(event.target.value)}
+                  className="font-mono bg-background"
+                  placeholder="Required to save settings or dismiss alerts"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Stored locally in this browser and sent as a bearer token for protected write actions.
+                </p>
+              </div>
+            </div>
             
             <div className="bg-card border border-border rounded-lg p-6 space-y-6">
               <h2 className="text-sm font-bold text-primary uppercase tracking-widest flex items-center gap-2">
@@ -167,7 +211,7 @@ export default function Settings() {
                   variant="outline" 
                   size="sm" 
                   onClick={handleTestNotification}
-                  disabled={testPushover.isPending || !form.watch("pushoverEnabled")}
+                  disabled={testPushover.isPending || !form.watch("pushoverEnabled") || !writeToken.trim()}
                   className="font-mono text-xs"
                 >
                   {testPushover.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Bell className="h-4 w-4 mr-2" />}
@@ -251,7 +295,7 @@ export default function Settings() {
               <Button 
                 type="submit" 
                 size="lg" 
-                disabled={updateSettings.isPending}
+                disabled={updateSettings.isPending || !writeToken.trim()}
                 className="font-bold tracking-widest uppercase px-8"
               >
                 {updateSettings.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
