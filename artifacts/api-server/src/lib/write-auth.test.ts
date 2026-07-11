@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import type { NextFunction, Request, Response } from "express";
 import { requireScannerWriteAuth } from "./write-auth";
 
-type MockRequest = Pick<Request, "get" | "headers">;
-
 function withScannerWriteToken<T>(token: string | undefined, run: () => T): T {
   const previous = process.env.SCANNER_WRITE_TOKEN;
   if (token === undefined) {
@@ -28,13 +26,13 @@ function invoke(headers: Record<string, string | string[] | undefined> = {}) {
   const normalized = new Map(
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
   );
-  const req: MockRequest = {
+  const req = {
     headers: Object.fromEntries(normalized),
     get(name: string) {
       const value = normalized.get(name.toLowerCase());
       return Array.isArray(value) ? value[0] : value;
     },
-  };
+  } as unknown as Request;
   const res = {
     statusCode: 200,
     body: undefined as unknown,
@@ -52,7 +50,7 @@ function invoke(headers: Record<string, string | string[] | undefined> = {}) {
     nextCalls += 1;
   };
 
-  requireScannerWriteAuth(req as Request, res as Response, next);
+  requireScannerWriteAuth(req, res as unknown as Response, next);
   return { res, nextCalls };
 }
 
