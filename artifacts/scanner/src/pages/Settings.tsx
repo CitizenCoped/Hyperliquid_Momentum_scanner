@@ -2,7 +2,7 @@ import { useGetSettings, useUpdateSettings, useTestPushover } from "@workspace/a
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { Save, Bell, Loader2 } from "lucide-react";
+import { getScannerWriteToken, setScannerWriteToken } from "@/lib/write-token";
 
 const settingsSchema = z.object({
   watchThreshold: z.coerce.number().min(0).max(100),
@@ -28,6 +29,7 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
   const testPushover = useTestPushover();
   const { toast } = useToast();
+  const [writeToken, setWriteToken] = useState(() => getScannerWriteToken());
   
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
@@ -55,6 +57,7 @@ export default function Settings() {
   }, [settings, form]);
 
   const onSubmit = (data: SettingsFormValues) => {
+    setScannerWriteToken(writeToken);
     updateSettings.mutate({ data }, {
       onSuccess: () => {
         toast({
@@ -73,6 +76,7 @@ export default function Settings() {
   };
 
   const handleTestNotification = () => {
+    setScannerWriteToken(writeToken);
     testPushover.mutate(undefined, {
       onSuccess: (res) => {
         if (res.success) {
@@ -109,6 +113,28 @@ export default function Settings() {
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+            <div className="bg-card border border-border rounded-lg p-6 space-y-4">
+              <div>
+                <h2 className="text-sm font-bold text-primary uppercase tracking-widest">
+                  Write Access
+                </h2>
+                <p className="text-sm text-muted-foreground mt-2">
+                  Mutating scanner actions require the server's SCANNER_WRITE_TOKEN.
+                  The token is stored only in this browser.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="scanner-write-token">Scanner Write Token</Label>
+                <Input
+                  id="scanner-write-token"
+                  type="password"
+                  autoComplete="off"
+                  value={writeToken}
+                  onChange={(event) => setWriteToken(event.target.value)}
+                  className="font-mono bg-background"
+                />
+              </div>
+            </div>
             
             <div className="bg-card border border-border rounded-lg p-6 space-y-6">
               <h2 className="text-sm font-bold text-primary uppercase tracking-widest flex items-center gap-2">
@@ -203,7 +229,7 @@ export default function Settings() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Minimum Alert Level for Push</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger className="bg-background">
                             <SelectValue placeholder="Select a level" />
