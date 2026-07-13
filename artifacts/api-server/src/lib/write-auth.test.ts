@@ -30,7 +30,7 @@ function closeServer(server: Server): Promise<void> {
 
 async function request(
   method: string,
-  headers?: HeadersInit,
+  headers?: Record<string, string>,
 ): Promise<Response> {
   const app = express();
   app.use(express.json());
