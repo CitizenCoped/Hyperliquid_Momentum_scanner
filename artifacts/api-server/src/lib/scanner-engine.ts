@@ -80,7 +80,10 @@ class ScannerEngine {
       { intervalSec: this.currentIntervalSec },
       "Scanner engine starting",
     );
-    void this.runOnce();
+    // Avoid overlapping the startup run with the first scheduled run.
+    // If runOnce takes longer than scanIntervalSeconds (e.g. retries/timeouts),
+    // concurrent runs can race and insert duplicate alerts/notifications.
+    await this.runOnce();
     this.scheduleNext();
   }
 
