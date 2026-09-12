@@ -13,6 +13,13 @@ import {
   summarizeBook,
   type HyperliquidAssetSnapshot,
 } from "./hyperliquid";
+import {
+  WINDOW_15M_MS,
+  WINDOW_1H_MS,
+  WINDOW_4H_MS,
+  lookbackWindow,
+  pctFromPrior,
+} from "./lookback";
 import { sendPushover } from "./pushover";
 import {
   totalSetupScore,
@@ -294,13 +301,14 @@ class ScannerEngine {
     >();
     if (symbols.length === 0) return result;
 
-    const t15m = new Date(polledAt.getTime() - 15 * 60 * 1000);
-    const t1h = new Date(polledAt.getTime() - 60 * 60 * 1000);
-    const t4h = new Date(polledAt.getTime() - 4 * 60 * 60 * 1000);
+    const w15m = lookbackWindow(polledAt, WINDOW_15M_MS);
+    const w1h = lookbackWindow(polledAt, WINDOW_1H_MS);
+    const w4h = lookbackWindow(polledAt, WINDOW_4H_MS);
     const t24h = new Date(polledAt.getTime() - 24 * 60 * 60 * 1000);
 
-    // Find prior price closest to each window per symbol
-    // Using a single grouped query with window functions
+    // Find prior price closest to each window per symbol.
+    // Lower-bound each window so a hours-old snapshot (autoscale sleep,
+    // crash, deploy) is not treated as the 15m/1h/4h mark.
     const rows = await db.execute<{
       symbol: string;
       px15: number | null;
@@ -313,19 +321,24 @@ class ScannerEngine {
       SELECT
         symbol,
         (SELECT mark_px FROM metric_snapshots m2
-          WHERE m2.symbol = m.symbol AND m2.polled_at <= ${t15m}
+          WHERE m2.symbol = m.symbol
+            AND m2.polled_at <= ${w15m.max} AND m2.polled_at >= ${w15m.min}
           ORDER BY m2.polled_at DESC LIMIT 1) AS "px15",
         (SELECT mark_px FROM metric_snapshots m2
-          WHERE m2.symbol = m.symbol AND m2.polled_at <= ${t1h}
+          WHERE m2.symbol = m.symbol
+            AND m2.polled_at <= ${w1h.max} AND m2.polled_at >= ${w1h.min}
           ORDER BY m2.polled_at DESC LIMIT 1) AS "px1h",
         (SELECT mark_px FROM metric_snapshots m2
-          WHERE m2.symbol = m.symbol AND m2.polled_at <= ${t4h}
+          WHERE m2.symbol = m.symbol
+            AND m2.polled_at <= ${w4h.max} AND m2.polled_at >= ${w4h.min}
           ORDER BY m2.polled_at DESC LIMIT 1) AS "px4h",
         (SELECT day_ntl_vlm FROM metric_snapshots m2
-          WHERE m2.symbol = m.symbol AND m2.polled_at <= ${t15m}
+          WHERE m2.symbol = m.symbol
+            AND m2.polled_at <= ${w15m.max} AND m2.polled_at >= ${w15m.min}
           ORDER BY m2.polled_at DESC LIMIT 1) AS "vlm15",
         (SELECT day_ntl_vlm FROM metric_snapshots m2
-          WHERE m2.symbol = m.symbol AND m2.polled_at <= ${t1h}
+          WHERE m2.symbol = m.symbol
+            AND m2.polled_at <= ${w1h.max} AND m2.polled_at >= ${w1h.min}
           ORDER BY m2.polled_at DESC LIMIT 1) AS "vlm1h",
         (SELECT day_ntl_vlm FROM metric_snapshots m2
           WHERE m2.symbol = m.symbol AND m2.polled_at >= ${t24h}
@@ -375,12 +388,9 @@ class ScannerEngine {
       const px = cur.px;
       const vlm = cur.vlm;
 
-      const pct = (from: number | null) =>
-        from && from > 0 ? ((px - Number(from)) / Number(from)) * 100 : 0;
-
-      const change15mPct = pct(r.px15);
-      const change1hPct = pct(r.px1h);
-      const change4hPct = pct(r.px4h);
+      const change15mPct = pctFromPrior(px, r.px15);
+      const change1hPct = pctFromPrior(px, r.px1h);
+      const change4hPct = pctFromPrior(px, r.px4h);
 
       // Intraday RVOL: 15min volume vs 1h average 15min volume (over last hour)
       // 15m vlm = vlm - vlm15
